@@ -1,0 +1,19 @@
+# Local Python environment and caches
+.venv/
+__pycache__/
+*.py[cod]
+
+# Generated outputs and server logs
+*.log
+prepared/
+crop_*.png
+debug_rois.png
+ocr_result_vietocr.json
+
+# Model weights are downloaded from the URL in models/vgg_transformer.yml.
+# Fine-tuned weights should be shared separately until their publication is intentional.
+models/*.pth
+
+# Collected forms and labels may contain personal data.
+forms/*
+!forms/README.md
