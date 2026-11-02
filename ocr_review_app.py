@@ -23,7 +23,8 @@ import gradio as gr
 import numpy as np
 from PIL import Image
 
-from prepare_dataset import FIELDS, SCALE, blue_handwriting_only, dark_handwriting_only, estimate_alignment, read_image
+from prepare_dataset import (FIELDS, LEGACY_FIELDS, SCALE, detect_layout,
+                             extract_handwriting, blue_handwriting_only, read_image)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -87,7 +88,7 @@ def prepare_form(image_path: str) -> dict:
     status = ""
 
     try:
-        transform, inliers = estimate_alignment(template, photo)
+        layout, transform, inliers = detect_layout(template, photo)
         height, width = template.shape[:2]
         scale_matrix = np.diag([SCALE, SCALE, 1.0])
         aligned = cv2.warpPerspective(
@@ -99,24 +100,22 @@ def prepare_form(image_path: str) -> dict:
         )
         scaled_template = cv2.resize(template, (width * SCALE, height * SCALE), interpolation=cv2.INTER_CUBIC)
         overlay = aligned.copy()
-        for field, (x1, y1, x2, y2) in FIELDS.items():
+        field_boxes = LEGACY_FIELDS if layout == "legacy" else FIELDS
+        for field, (x1, y1, x2, y2) in field_boxes.items():
             a, b, c, d = (v * SCALE for v in (x1, y1, x2, y2))
             region = aligned[b:d, a:c]
-            cleaned, has_blue = blue_handwriting_only(region, scaled_template[b:d, a:c])
-            has_dark = False
-            if not has_blue:
-                cleaned, has_dark = dark_handwriting_only(region, scaled_template[b:d, a:c])
+            cleaned, ink = extract_handwriting(region, scaled_template[b:d, a:c], layout)
             crops[field] = bgr_to_pil(cleaned)
             methods[field] = (
-                "tự động · tách mực xanh" if has_blue else
-                "tự động · trừ nền mẫu" if has_dark else "tự động · ảnh gốc"
+                "tự động · tách mực xanh" if ink == "blue" else
+                "tự động · trừ nền mẫu" if ink == "dark" else "tự động · ảnh gốc"
             )
             cv2.rectangle(overlay, (a, b), (c, d), (0, 35, 230), 3)
             cv2.putText(
                 overlay, field, (a + 6, max(28, b - 8)), cv2.FONT_HERSHEY_SIMPLEX,
                 0.8, (0, 35, 230), 2, cv2.LINE_AA,
             )
-        status = f"Đã căn phiếu ({inliers} điểm khớp). Xem kỹ 4 ảnh crop rồi xác nhận từng trường."
+        status = f"Đã căn phiếu ({inliers} điểm khớp, bố cục {layout}). Xem kỹ 4 ảnh crop rồi xác nhận từng trường."
     except (ValueError, np.linalg.LinAlgError) as exc:
         # The user can still crop each field manually from the uploaded image.
         aligned = photo
@@ -133,6 +132,7 @@ def prepare_form(image_path: str) -> dict:
         "crops": crops,
         "methods": methods,
         "predictions": {},
+        "model_name": "",
         "status": status,
     }
 
@@ -210,14 +210,16 @@ def result_payload(prepared: dict, edited: dict[str, str], weights: str | None) 
         }
     return {
         "form": prepared["form_name"],
-        "model": "VietOCR vgg_transformer · fine-tuned" if weights else "VietOCR vgg_transformer · gốc",
+        "model": prepared.get("model_name") or ("VietOCR vgg_transformer · fine-tuned" if weights else "VietOCR vgg_transformer · gốc"),
         "all_fields_valid": all(item["valid"] for item in fields.values()),
         "fields": fields,
     }
 
 
-def build_app(weights: str | None = None) -> gr.Blocks:
+def build_app(weights: str | None = None, compare_weights: str | None = None) -> gr.Blocks:
     model_note = (
+        f"Có thể so VietOCR gốc với bản fine-tune nhẹ `{Path(compare_weights).name}`; mặc định dùng bản gốc."
+        if compare_weights else
         f"Đang dùng trọng số fine-tune: `{Path(weights).name}`."
         if weights else "Đang dùng VietOCR gốc (chưa fine-tune)."
     )
@@ -267,6 +269,10 @@ def build_app(weights: str | None = None) -> gr.Blocks:
         )
         apply_button = gr.Button("Dùng crop vừa chọn", visible=False)
 
+        model_choice = gr.Radio(
+            choices=[("VietOCR gốc", "baseline"), ("Fine-tune bước 1", "fine_tuned")],
+            value="baseline", label="Model dùng cho lượt OCR này", visible=bool(compare_weights),
+        )
         ocr_button = gr.Button("2. Xác nhận crop và chạy VietOCR", variant="primary")
         gr.Markdown("## Kết quả nhận dạng\nNếu chữ sai, sửa trực tiếp trong ô. Muốn đổi vùng ảnh, bấm **Sửa crop** rồi chạy OCR lại.")
         text_boxes = {}
@@ -351,20 +357,23 @@ def build_app(weights: str | None = None) -> gr.Blocks:
                      *crop_images.values(), *confirms.values(), *text_boxes.values()],
         )
 
-        def on_ocr(state, *confirmation_values):
+        def on_ocr(state, selected_model, *confirmation_values):
             if not all(confirmation_values):
                 raise gr.Error("Hãy xác nhận Crop đúng cho cả bốn trường trước khi OCR.")
+            selected_weights = compare_weights if compare_weights and selected_model == "fine_tuned" else weights
             try:
-                predictions = recognize(state, weights)
+                predictions = recognize(state, selected_weights)
             except ValueError as exc:
                 raise gr.Error(str(exc)) from exc
             except Exception as exc:
                 raise gr.Error(f"Không chạy được VietOCR: {exc}") from exc
             updated = dict(state)
             updated["predictions"] = predictions
+            updated["model_name"] = ("VietOCR vgg_transformer · fine-tune bước 1" if selected_weights
+                                     else "VietOCR vgg_transformer · gốc")
             result = {
                 prepared_state: updated,
-                status: "Đã chạy VietOCR. Kiểm tra và sửa chữ trong bốn ô bên dưới trước khi xuất JSON.",
+                status: f"Đã chạy {updated['model_name']}. Kiểm tra và sửa chữ trước khi xuất JSON.",
                 json_view: None,
                 json_file: None,
             }
@@ -373,7 +382,7 @@ def build_app(weights: str | None = None) -> gr.Blocks:
             return result
 
         ocr_button.click(
-            on_ocr, inputs=[prepared_state, *confirms.values()],
+            on_ocr, inputs=[prepared_state, model_choice, *confirms.values()],
             outputs=[prepared_state, status, json_view, json_file, *text_boxes.values()],
         )
 
@@ -399,12 +408,16 @@ def build_app(weights: str | None = None) -> gr.Blocks:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weights", help="Path to fine-tuned VietOCR weights; omit for pretrained baseline")
+    parser.add_argument("--compare-weights", help="Optional fine-tuned weights selectable beside the original model")
     parser.add_argument("--port", type=int, default=7860)
     args = parser.parse_args()
     weights = os.path.abspath(args.weights) if args.weights else None
+    compare_weights = os.path.abspath(args.compare_weights) if args.compare_weights else None
     if weights and not Path(weights).is_file():
         parser.error(f"Không tìm thấy file trọng số: {weights}")
-    app = build_app(weights)
+    if compare_weights and not Path(compare_weights).is_file():
+        parser.error(f"Không tìm thấy file trọng số: {compare_weights}")
+    app = build_app(weights, compare_weights)
     app.launch(server_name="127.0.0.1", server_port=args.port, share=False, show_error=True)
 
 

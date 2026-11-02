@@ -2,7 +2,7 @@ param([int]$Port = 7861)
 
 $projectDir = $PSScriptRoot
 $pythonPath = Join-Path $projectDir '.venv\Scripts\python.exe'
-$modelPath = Join-Path $projectDir 'models\extended1_finetuned.pth'
+$modelPath = Join-Path $projectDir 'models\incremental_component_head_step1.pth'
 $appPath = Join-Path $projectDir 'ocr_review_app.py'
 
 if (-not (Test-Path -LiteralPath $pythonPath)) {
@@ -13,4 +13,4 @@ if (-not (Test-Path -LiteralPath $modelPath)) {
 }
 
 Write-Host "Mở http://127.0.0.1:$Port sau khi Gradio khởi động. Giữ cửa sổ PowerShell này mở."
-& $pythonPath $appPath --weights $modelPath --port $Port
+& $pythonPath $appPath --compare-weights $modelPath --port $Port

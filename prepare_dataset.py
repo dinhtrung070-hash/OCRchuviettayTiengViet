@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import csv
 import re
+from functools import lru_cache
 from pathlib import Path
 
 import cv2
@@ -22,6 +23,12 @@ FIELDS = {
     "ngay_sinh": (195, 145, 338, 188),
     "dan_toc": (415, 145, 545, 188),
     "ton_giao": (638, 145, 825, 188),
+}
+LEGACY_FIELDS = {
+    "ho_ten": (185, 105, 820, 157),
+    "ngay_sinh": (185, 157, 365, 212),
+    "dan_toc": (401, 157, 590, 212),
+    "ton_giao": (635, 157, 825, 212),
 }
 SCALE = 3
 
@@ -65,6 +72,43 @@ def estimate_alignment(template: np.ndarray, photo: np.ndarray) -> tuple[np.ndar
     if transform is None or count < 12:
         raise ValueError(f"Alignment is unreliable ({count} inliers)")
     return transform, count
+
+
+def detect_layout(template: np.ndarray, photo: np.ndarray) -> tuple[str, np.ndarray, int]:
+    """Distinguish the old uppercase-heading form from the current template."""
+    current_transform, current_inliers = estimate_alignment(template, photo)
+    old_reference = Path(__file__).parent / "phieu_da_viet.png"
+    if old_reference.is_file():
+        try:
+            old = legacy_reference(str(old_reference))
+            ratio = min(1.0, 1000 / photo.shape[1])
+            small_photo = cv2.resize(photo, None, fx=ratio, fy=ratio, interpolation=cv2.INTER_AREA)
+            _, old_inliers = estimate_alignment(old, small_photo)
+            if old_inliers >= 25 and old_inliers > current_inliers:
+                return "legacy", current_transform, current_inliers
+        except ValueError:
+            pass
+    return "current", current_transform, current_inliers
+
+
+@lru_cache(maxsize=1)
+def legacy_reference(path: str) -> np.ndarray:
+    original = read_image(Path(path))
+    ratio = 900 / original.shape[1]
+    return cv2.resize(original, None, fx=ratio, fy=ratio, interpolation=cv2.INTER_AREA)
+
+
+def extract_handwriting(region: np.ndarray, blank_region: np.ndarray, layout: str) -> tuple[np.ndarray, str]:
+    """Use the same crop cleaning for dataset generation and live inference."""
+    cleaned, blue = blue_handwriting_only(region)
+    if blue:
+        return cleaned, "blue"
+    if layout == "legacy":
+        # The blank template belongs to the current layout; subtraction would
+        # remove unrelated strokes from the old form. Keep the visible crop.
+        return region, "raw"
+    cleaned, dark = dark_handwriting_only(region, blank_region)
+    return cleaned, "dark" if dark else "raw"
 
 
 def blue_handwriting_only(region: np.ndarray, blank_region: np.ndarray | None = None) -> tuple[np.ndarray, bool]:
@@ -135,7 +179,7 @@ def dark_handwriting_only(region: np.ndarray, blank_region: np.ndarray) -> tuple
 
 def process_form(template: np.ndarray, source: Path, output: Path) -> list[dict[str, str]]:
     photo = read_image(source)
-    transform, inliers = estimate_alignment(template, photo)
+    layout, transform, inliers = detect_layout(template, photo)
     height, width = template.shape[:2]
     scale_matrix = np.diag([SCALE, SCALE, 1.0])
     aligned = cv2.warpPerspective(
@@ -152,13 +196,12 @@ def process_form(template: np.ndarray, source: Path, output: Path) -> list[dict[
 
     debug = aligned.copy()
     rows = []
-    for field, (x1, y1, x2, y2) in FIELDS.items():
+    field_boxes = LEGACY_FIELDS if layout == "legacy" else FIELDS
+    for field, (x1, y1, x2, y2) in field_boxes.items():
         box = tuple(value * SCALE for value in (x1, y1, x2, y2))
         a, b, c, d = box
         region = aligned[b:d, a:c]
-        cleaned, blue_found = blue_handwriting_only(region, scaled_template[b:d, a:c])
-        if not blue_found:
-            cleaned, _ = dark_handwriting_only(region, scaled_template[b:d, a:c])
+        cleaned, ink = extract_handwriting(region, scaled_template[b:d, a:c], layout)
         crop_file = form_dir / f"{field}.png"
         write_image(crop_file, cleaned)
         cv2.rectangle(debug, (a, b), (c, d), (0, 0, 255), 2)
@@ -168,8 +211,9 @@ def process_form(template: np.ndarray, source: Path, output: Path) -> list[dict[
             "field": field,
             "image": str(crop_file.relative_to(output)).replace("\\", "/"),
             "label": "",
-            "blue_ink_detected": str(blue_found),
+            "blue_ink_detected": str(ink == "blue"),
             "alignment_inliers": str(inliers),
+            "layout": layout,
         })
     write_image(form_dir / "debug_fields.png", debug)
     return rows
@@ -217,12 +261,12 @@ def main() -> None:
         for row in rows:
             item = truth.get(row["form"])
             if item:
-                row["writer_id"] = item["writer_id"].strip()
+                row["writer_id"] = item.get("writer_id", "").strip()
                 row["label"] = item[row["field"]].strip()
     updated = {(row["form"], row["field"]) for row in rows}
     rows.extend(old for key, old in previous.items() if key not in updated and (args.output_dir / old["image"]).is_file())
     with manifest.open("w", newline="", encoding="utf-8-sig") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["form", "writer_id", "field", "image", "label", "blue_ink_detected", "alignment_inliers"])
+        writer = csv.DictWriter(handle, fieldnames=["form", "writer_id", "field", "image", "label", "blue_ink_detected", "alignment_inliers", "layout"])
         writer.writeheader()
         writer.writerows(rows)
     print(f"Manifest contains {len(rows)} crops: {manifest}")

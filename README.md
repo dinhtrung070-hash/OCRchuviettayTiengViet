@@ -1,6 +1,6 @@
 # OCR phiếu viết tay tiếng Việt · Extended 1
 
-Mẫu hiện tại có bốn trường: họ tên, ngày sinh, dân tộc, tôn giáo. Pipeline căn ảnh chụp theo `phieu_mau.png` bằng SIFT + homography, cắt bốn vùng, tách mực xanh hoặc trừ mẫu in để lấy mực đen. Bản fine tune VietOCR và kết quả trên 50 phiếu được ghi tại [EXTENDED1_STATUS.md](EXTENDED1_STATUS.md). Kết quả OCR hiện còn cần người dùng kiểm tra và sửa.
+Mẫu có bốn trường: họ tên, ngày sinh, dân tộc, tôn giáo. Pipeline nhận biết hai bản in hiện có, căn phiếu bằng SIFT + homography, cắt bốn vùng, lọc chấm với mực xanh hoặc trừ nền mẫu với mực đen. Fine-tune VietOCR từng bước nhỏ và kết quả thực tế ghi ở [EXTENDED1_STATUS.md](EXTENDED1_STATUS.md). Kết quả OCR vẫn cần người dùng kiểm tra và sửa.
 
 ## Cài trên máy mới sau khi clone
 
@@ -31,11 +31,11 @@ Mở <http://127.0.0.1:7860>. Hai phiếu `phieu_da_viet.png` và `phieudaviet1.
 
 Demo mặc định dùng **VietOCR vgg_transformer pretrained**, chưa phải mô hình đã fine-tune. Repo không chứa file trọng số 145 MB; nếu chưa có `models/pretrained_vgg_transformer.pth`, VietOCR tải trọng số gốc từ URL trong `models/vgg_transformer.yml` ở lần OCR đầu tiên. Cần Internet cho lần tải này. Khi đã có trọng số fine-tune, chạy `ocr_review_app.py --weights đường_dẫn_đến_file.pth` để dùng trọng số mới. Toàn bộ demo chỉ phục vụ trên máy này (`127.0.0.1`), chạy bằng CPU nên lần OCR đầu có thể chậm.
 
-Trên máy đã train Extended 1, chạy `.\start_extended1.ps1` rồi mở <http://127.0.0.1:7861>. Nếu PowerShell chặn file script, dùng lệnh Python trực tiếp trong [EXTENDED1_STATUS.md](EXTENDED1_STATUS.md). Trọng số `models/extended1_finetuned.pth` chỉ có ở máy đã train; nhóm cần nhận riêng file này nếu muốn chạy cùng model trên máy khác.
+Trên máy đã train Extended 1, chạy `.\start_extended1.ps1` rồi mở <http://127.0.0.1:7861>. Giao diện cho chọn model gốc hoặc checkpoint fine-tune nhẹ `models/incremental_component_head_step1.pth` trên cùng crop; mặc định dùng model gốc. File trọng số chỉ có ở máy đã train; nhóm cần nhận riêng nếu muốn so sánh trên máy khác.
 
-Hai phiếu mẫu cũ vẫn có thể dùng để thử giao diện. Với bộ 50 phiếu mới, nhánh tách bút đen đã được chạy trên ảnh thật. Kết quả so sánh mô hình gốc và bản fine tune trên tập test được ghi riêng trong [EXTENDED1_STATUS.md](EXTENDED1_STATUS.md).
+Hai phiếu mẫu cũ vẫn có thể dùng để thử giao diện. Bộ 50 phiếu có cả bút xanh và bút đen. Kết quả so sánh model gốc và bản fine-tune trên tập test được ghi trong [EXTENDED1_STATUS.md](EXTENDED1_STATUS.md).
 
-**Extended 1:** Đã fine tune trên ảnh thật có cả hai màu mực. Xem [EXTENDED1_STATUS.md](EXTENDED1_STATUS.md) để biết dữ liệu, thông số train, kết quả valid/test và giới hạn của phép đánh giá.
+**Extended 1:** Đã train một checkpoint rất nhẹ từ model gốc. Bản này cải thiện CER trên valid nhưng chưa cải thiện test, nên demo mặc định dùng model gốc. Xem [EXTENDED1_STATUS.md](EXTENDED1_STATUS.md) để biết số liệu và giới hạn đánh giá.
 
 ## Chạy với hai ảnh mẫu
 
@@ -68,9 +68,9 @@ Kết quả nằm trong `prepared/`: mỗi phiếu có `aligned.png`, `debug_fie
 ## Giới hạn hiện tại
 
 - ZIP có 50 phiếu nhưng không có đáp án hay mã người viết. Đã gán nhãn lượt đầu cho 45 phiếu; cần nhóm kiểm tra lại. Chia train/valid/test hiện theo **phiếu**, chưa đảm bảo người viết độc lập.
-- Trên 7 phiếu test, bản fine tune đúng toàn chuỗi 2/28 trường, VietOCR gốc 1/28. Lỗi ký tự giảm nhưng kết quả vẫn cần bước sửa tay. Chi tiết theo trường và màu mực ở [EXTENDED1_STATUS.md](EXTENDED1_STATUS.md).
+- Trên 7 phiếu test với pipeline mới, model gốc và bản fine-tune nhẹ đều đúng toàn chuỗi 1/28 trường. CER của bản fine-tune còn hơi xấu hơn. Chi tiết ở [EXTENDED1_STATUS.md](EXTENDED1_STATUS.md).
 - Căn phiếu có thể thất bại nếu ảnh mờ, mất tiêu đề/nhãn in, hoặc mẫu in khác. Trường hợp này được báo `SKIP`; không đưa ảnh lỗi vào tập train.
-- Tọa độ `FIELDS` trong `prepare_dataset.py` chỉ dành cho **mẫu phiếu hiện có**. Nếu đổi biểu mẫu phải hiệu chỉnh lại.
+- Tọa độ `FIELDS` và `LEGACY_FIELDS` trong `prepare_dataset.py` chỉ dành cho **hai bản in hiện có**. Nếu đổi biểu mẫu phải hiệu chỉnh lại.
 
 Tài liệu dự án VietOCR mô tả [định dạng nhãn train/test](https://github.com/pbcquoc/vietocr#c%C3%A1ch-t%E1%BA%A1o-file-traintest).
 

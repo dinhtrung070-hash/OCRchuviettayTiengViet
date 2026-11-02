@@ -7,6 +7,7 @@ before using this script. The two-form pilot is handled by pilot_finetune.py.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import random
 from pathlib import Path
@@ -56,9 +57,28 @@ def teacher_loss(model, vocab, row: tuple[Path, str]):
     return F.cross_entropy(logits.reshape(-1, logits.shape[-1]), target)
 
 
+def edit_distance(left: str, right: str) -> int:
+    previous = list(range(len(right) + 1))
+    for index, first in enumerate(left, 1):
+        current = [index]
+        for column, second in enumerate(right, 1):
+            current.append(min(current[-1] + 1, previous[column] + 1,
+                               previous[column - 1] + (first != second)))
+        previous = current
+    return previous[-1]
+
+
+def read_regression(root: Path) -> list[tuple[Path, str]]:
+    with (root / "to_label.csv").open(newline="", encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle))
+    return [(root / row["image"], row["label"].strip()) for row in rows if row["label"].strip()]
+
+
 def validate(model, vocab, rows: list[tuple[Path, str]]) -> dict:
     model.eval()
     exact = 0
+    total_distance = 0
+    total_characters = 0
     losses = []
     with torch.no_grad():
         for image_path, label in rows:
@@ -68,7 +88,10 @@ def validate(model, vocab, rows: list[tuple[Path, str]]) -> dict:
             tokens, _ = translate(image, model)
             prediction = vocab.decode(tokens[0].tolist())
             exact += prediction == label
-    return {"exact": exact, "total": len(rows), "mean_loss": sum(losses) / len(losses)}
+            total_distance += edit_distance(prediction, label)
+            total_characters += len(label)
+    return {"exact": exact, "total": len(rows), "cer": total_distance / total_characters,
+            "mean_loss": sum(losses) / len(losses)}
 
 
 def main() -> None:
@@ -77,6 +100,8 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=BASE_DIR / "models" / "extended1_finetuned.pth")
     parser.add_argument("--initial-weights", type=Path,
                         help="Resume fine-tuning from a local checkpoint instead of pretrained VietOCR")
+    parser.add_argument("--regression-dir", type=Path,
+                        help="Optional labeled old demo crops; reject checkpoints that regress there")
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--lr", type=float, default=0.000001)
     parser.add_argument("--scope", choices=["head", "transformer"], default="transformer")
@@ -88,6 +113,7 @@ def main() -> None:
         parser.error("epochs, accumulate, threads and lr must be positive")
     train_rows = read_annotations(args.data_dir, "train_annotation.txt")
     valid_rows = read_annotations(args.data_dir, "valid_annotation.txt")
+    regression_rows = read_regression(args.regression_dir) if args.regression_dir else []
     if {p for p, _ in train_rows} & {p for p, _ in valid_rows}:
         parser.error("Train/valid contain the same image paths")
     torch.set_num_threads(args.threads)
@@ -114,8 +140,12 @@ def main() -> None:
     parameters = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(parameters, lr=args.lr)
     baseline = validate(model, vocab, valid_rows)
+    regression_baseline = validate(model, vocab, regression_rows) if regression_rows else None
     print(f"initial validation: {baseline}", flush=True)
-    best = None
+    if regression_baseline:
+        print(f"old-form regression baseline: {regression_baseline}", flush=True)
+    best = (baseline["exact"], -baseline["cer"])
+    selected_epoch = None
     history = []
     args.output.parent.mkdir(parents=True, exist_ok=True)
     for epoch in range(args.epochs):
@@ -136,24 +166,35 @@ def main() -> None:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
         validation = validate(model, vocab, valid_rows)
-        result = {"epoch": epoch + 1, "train_mean_loss": sum(losses) / len(losses), "valid": validation}
+        regression = validate(model, vocab, regression_rows) if regression_rows else None
+        score = (validation["exact"], -validation["cer"])
+        accepted = (score > best and validation["exact"] >= baseline["exact"] and
+                    validation["cer"] <= baseline["cer"] and
+                    (regression_baseline is None or regression["exact"] >= regression_baseline["exact"]))
+        result = {"epoch": epoch + 1, "train_mean_loss": sum(losses) / len(losses),
+                  "valid": validation, "old_form_regression": regression,
+                  "accepted": accepted}
         history.append(result)
         print(f"epoch {epoch + 1}: {result}", flush=True)
-        score = (validation["exact"], -validation["mean_loss"])
-        if best is None or score > best:
+        if accepted:
             torch.save(model.state_dict(), args.output)
             best = score
+            selected_epoch = epoch + 1
     report = {
         "train_images": len(train_rows), "valid_images": len(valid_rows),
         "scope": args.scope, "learning_rate": args.lr, "initial_valid": baseline,
+        "initial_old_form_regression": regression_baseline,
         "initial_weights": initial,
         "trainable_parameters": sum(p.numel() for p in parameters),
         "total_parameters": sum(p.numel() for p in model.parameters()),
-        "history": history, "best_weights": str(args.output),
+        "history": history, "best_weights": str(args.output) if selected_epoch else None,
+        "selected_epoch": selected_epoch,
+        "selection_rule": "Save only if validation exact and CER do not regress from baseline, the score improves on the best checkpoint, and old-form exact does not regress.",
         "note": "For a writer-generalization claim, group by real writer ID; provisional form groups support only exploratory evaluation.",
     }
     args.output.with_suffix(".json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Saved best weights: {args.output}", flush=True)
+    print(f"Saved best weights: {args.output}" if selected_epoch else
+          "No checkpoint passed the validation/regression gate; initial weights remain preferred.", flush=True)
 
 
 if __name__ == "__main__":
