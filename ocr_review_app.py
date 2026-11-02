@@ -21,7 +21,7 @@ import gradio as gr
 import numpy as np
 from PIL import Image
 
-from prepare_dataset import FIELDS, SCALE, blue_handwriting_only, estimate_alignment, read_image
+from prepare_dataset import FIELDS, SCALE, blue_handwriting_only, dark_handwriting_only, estimate_alignment, read_image
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -90,13 +90,20 @@ def prepare_form(image_path: str) -> dict:
             flags=cv2.INTER_CUBIC,
             borderValue=(255, 255, 255),
         )
+        scaled_template = cv2.resize(template, (width * SCALE, height * SCALE), interpolation=cv2.INTER_CUBIC)
         overlay = aligned.copy()
         for field, (x1, y1, x2, y2) in FIELDS.items():
             a, b, c, d = (v * SCALE for v in (x1, y1, x2, y2))
             region = aligned[b:d, a:c]
             cleaned, has_blue = blue_handwriting_only(region)
+            has_dark = False
+            if not has_blue:
+                cleaned, has_dark = dark_handwriting_only(region, scaled_template[b:d, a:c])
             crops[field] = bgr_to_pil(cleaned)
-            methods[field] = "tự động · tách mực xanh" if has_blue else "tự động · ảnh gốc"
+            methods[field] = (
+                "tự động · tách mực xanh" if has_blue else
+                "tự động · trừ nền mẫu" if has_dark else "tự động · ảnh gốc"
+            )
             cv2.rectangle(overlay, (a, b), (c, d), (0, 35, 230), 3)
             cv2.putText(
                 overlay, field, (a + 6, max(28, b - 8)), cv2.FONT_HERSHEY_SIMPLEX,
@@ -180,11 +187,15 @@ def result_payload(prepared: dict, edited: dict[str, str], weights: str | None) 
 
 
 def build_app(weights: str | None = None) -> gr.Blocks:
+    model_note = (
+        f"Đang dùng trọng số fine-tune: `{Path(weights).name}`."
+        if weights else "Đang dùng VietOCR gốc (chưa fine-tune)."
+    )
     with gr.Blocks(title="Demo OCR phiếu viết tay · VietOCR") as app:
         gr.Markdown(
             "# OCR phiếu viết tay tiếng Việt\n"
             "Tải một phiếu lên → xem và xác nhận 4 crop → chạy VietOCR → sửa chữ nếu cần → tải JSON. "
-            "Bản hiện tại dùng VietOCR gốc cho tới khi có trọng số fine-tune."
+            + model_note
         )
         prepared_state = gr.State(None)
         active_field = gr.State(None)

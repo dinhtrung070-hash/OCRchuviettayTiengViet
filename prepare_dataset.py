@@ -82,6 +82,30 @@ def blue_handwriting_only(region: np.ndarray) -> tuple[np.ndarray, bool]:
     return cleaned[y1:y2, x1:x2], True
 
 
+def dark_handwriting_only(region: np.ndarray, blank_region: np.ndarray) -> tuple[np.ndarray, bool]:
+    """Subtract the registered blank form to isolate dark handwriting.
+
+    This is only an estimate. Real black ink on printed dots needs validation
+    with actual black-pen scans before its accuracy can be claimed.
+    """
+    gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+    blank = cv2.cvtColor(blank_region, cv2.COLOR_BGR2GRAY)
+    if blank.shape != gray.shape:
+        blank = cv2.resize(blank, (gray.shape[1], gray.shape[0]))
+    difference = blank.astype(np.int16) - gray.astype(np.int16)
+    mask = np.uint8((difference > 65) & (gray < 170)) * 255
+    if cv2.countNonZero(mask) < 40:
+        return region, False
+    mask = cv2.dilate(mask, np.ones((2, 2), np.uint8), iterations=1)
+    ys, xs = np.where(mask > 0)
+    pad = 12
+    x1, x2 = max(0, int(xs.min()) - pad), min(region.shape[1], int(xs.max()) + pad + 1)
+    y1, y2 = max(0, int(ys.min()) - pad), min(region.shape[0], int(ys.max()) + pad + 1)
+    cleaned = np.full_like(region, 255)
+    cleaned[mask > 0] = region[mask > 0]
+    return cleaned[y1:y2, x1:x2], True
+
+
 def process_form(template: np.ndarray, source: Path, output: Path) -> list[dict[str, str]]:
     photo = read_image(source)
     transform, inliers = estimate_alignment(template, photo)
@@ -94,6 +118,7 @@ def process_form(template: np.ndarray, source: Path, output: Path) -> list[dict[
         flags=cv2.INTER_CUBIC,
         borderValue=(255, 255, 255),
     )
+    scaled_template = cv2.resize(template, (width * SCALE, height * SCALE), interpolation=cv2.INTER_CUBIC)
     form_dir = output / source.stem
     form_dir.mkdir(parents=True, exist_ok=True)
     write_image(form_dir / "aligned.png", aligned)
@@ -105,6 +130,8 @@ def process_form(template: np.ndarray, source: Path, output: Path) -> list[dict[
         a, b, c, d = box
         region = aligned[b:d, a:c]
         cleaned, blue_found = blue_handwriting_only(region)
+        if not blue_found:
+            cleaned, _ = dark_handwriting_only(region, scaled_template[b:d, a:c])
         crop_file = form_dir / f"{field}.png"
         write_image(crop_file, cleaned)
         cv2.rectangle(debug, (a, b), (c, d), (0, 0, 255), 2)

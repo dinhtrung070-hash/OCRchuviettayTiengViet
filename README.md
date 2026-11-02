@@ -31,7 +31,9 @@ Mở <http://127.0.0.1:7860>. Hai phiếu `phieu_da_viet.png` và `phieudaviet1.
 
 Demo mặc định dùng **VietOCR vgg_transformer pretrained**, chưa phải mô hình đã fine-tune. Repo không chứa file trọng số 145 MB; nếu chưa có `models/pretrained_vgg_transformer.pth`, VietOCR tải trọng số gốc từ URL trong `models/vgg_transformer.yml` ở lần OCR đầu tiên. Cần Internet cho lần tải này. Khi đã có trọng số fine-tune, chạy `ocr_review_app.py --weights đường_dẫn_đến_file.pth` để dùng trọng số mới. Toàn bộ demo chỉ phục vụ trên máy này (`127.0.0.1`), chạy bằng CPU nên lần OCR đầu có thể chậm.
 
-Thử trực tiếp hai phiếu hiện có: phiếu `phieudaviet1.png` được nhận đúng 4/4 trường trong một lần chạy; phiếu `phieu_da_viet.png` bị sai trường **tôn giáo**. Đây là kết quả thử hai ảnh, chưa phải số đo độ chính xác. Mực đen chưa được kiểm chứng; khi không phát hiện mực xanh, giao diện đưa crop ảnh gốc vào VietOCR để người dùng kiểm tra.
+Thử trực tiếp hai phiếu hiện có: phiếu `phieudaviet1.png` được nhận đúng 4/4 trường trong một lần chạy; phiếu `phieu_da_viet.png` bị sai trường **tôn giáo**. Đây là kết quả thử hai ảnh, chưa phải số đo độ chính xác. Khi không phát hiện mực xanh, giao diện thử trừ nền mẫu để lấy nét bút đen; nếu không đủ nét thì giữ crop gốc. Cách xử lý này chưa được kiểm chứng trên phiếu viết bút đen thật.
+
+**Pilot Extended 1:** Xem [EXTENDED1_STATUS.md](EXTENDED1_STATUS.md) để chạy fine-tune thử trên hai phiếu, kiểm tra bản mô phỏng mực đen và dùng trọng số mới trong giao diện. Kết quả hiện tại chỉ là kiểm thử trên dữ liệu đã dùng để train; chưa có số đo cho người viết và bút đen mới.
 
 ## Chạy với hai ảnh mẫu
 
@@ -64,7 +66,7 @@ Kết quả nằm trong `prepared/`: mỗi phiếu có `aligned.png`, `debug_fie
 ## Giới hạn hiện tại
 
 - Chỉ kiểm tra trực quan trên **hai phiếu mẫu**; chưa có đủ dữ liệu để huấn luyện hoặc báo cáo độ chính xác.
-- Bộ tách mực ưu tiên bút xanh. Nếu không tìm thấy nét xanh, chương trình lưu vùng cắt gốc và đặt `blue_ink_detected=False` để kiểm tra thủ công. Bút đen cần cách tách chữ khác.
+- Bộ tách mực ưu tiên bút xanh. Nếu không tìm thấy nét xanh, chương trình thử trừ nền mẫu để lấy nét tối; khi vẫn không đủ nét thì giữ crop gốc và báo `blue_ink_detected=False`. Bút đen thật cần được kiểm tra sau khi có dữ liệu mới.
 - Căn phiếu có thể thất bại nếu ảnh mờ, mất tiêu đề/nhãn in, hoặc mẫu in khác. Trường hợp này được báo `SKIP`; không đưa ảnh lỗi vào tập train.
 - Tọa độ `FIELDS` trong `prepare_dataset.py` chỉ dành cho **mẫu phiếu hiện có**. Nếu đổi biểu mẫu phải hiệu chỉnh lại.
 
