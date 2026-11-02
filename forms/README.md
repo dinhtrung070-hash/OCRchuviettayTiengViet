@@ -1,4 +1,6 @@
-# Thu dữ liệu pilot cho Extended 1
+# Thu dữ liệu và kiểm tra nhãn cho Extended 1
+
+Bộ 50 ảnh mới đã được xử lý riêng trong `forms/dataset_20261102/` trên máy phát triển. Thư mục ảnh và nhãn được `.gitignore` loại khỏi GitHub. Xem `EXTENDED1_STATUS.md` ở thư mục gốc để biết kết quả hiện tại. Hướng dẫn dưới đây dành cho đợt thu thêm phiếu có mã người viết rõ ràng.
 
 ## Việc cần làm ngay
 
@@ -7,7 +9,7 @@ Thu **10 phiếu thử từ 5 người viết**, mỗi người viết 2 phiếu
 ### Quy tắc thu phiếu
 
 1. Dùng đúng mẫu `Demo/phieu_mau.png` hoặc bản in từ tài liệu mẫu hiện có. Không thay đổi font, vị trí hay kích thước các trường.
-2. Dùng **bút bi xanh** vì pipeline hiện tại tách nét bút xanh khỏi chữ in đen.
+2. Dùng cả **bút xanh và bút đen**, ghi lại màu mực của từng phiếu để kiểm tra riêng hai nhóm.
 3. Người viết chép đúng nội dung được phân công; không cần dùng thông tin cá nhân thật.
 4. Chụp trọn phiếu, còn nhìn thấy tiêu đề và các nhãn in. Ảnh rõ nét, không bị che, không cháy sáng và không cắt mất mép phiếu.
 5. Đặt tên ảnh đúng mẫu `w01_f01.jpg`, `w01_f02.jpg`, ..., `w05_f02.jpg`. `w01` là mã người viết, `f01` là số phiếu. Không dùng cùng một mã cho hai người khác nhau.

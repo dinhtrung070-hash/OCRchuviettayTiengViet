@@ -17,10 +17,11 @@ import numpy as np
 
 # Coordinates on Demo/phieu_mau.png (863 x 242). Keep the printed labels out.
 FIELDS = {
-    "ho_ten": (185, 105, 820, 157),
-    "ngay_sinh": (185, 157, 365, 212),
-    "dan_toc": (401, 157, 590, 212),
-    "ton_giao": (635, 157, 825, 212),
+    # The second row can rise into the name row; stop before its Dân tộc field.
+    "ho_ten": (195, 96, 470, 150),
+    "ngay_sinh": (195, 145, 338, 188),
+    "dan_toc": (415, 145, 545, 188),
+    "ton_giao": (638, 145, 825, 188),
 }
 SCALE = 3
 
@@ -66,34 +67,60 @@ def estimate_alignment(template: np.ndarray, photo: np.ndarray) -> tuple[np.ndar
     return transform, count
 
 
-def blue_handwriting_only(region: np.ndarray) -> tuple[np.ndarray, bool]:
-    """Remove black printed dots/labels for the blue-pen demo forms."""
+def blue_handwriting_only(region: np.ndarray, blank_region: np.ndarray | None = None) -> tuple[np.ndarray, bool]:
+    """Keep blue handwriting and suppress printed text and dotted lines."""
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(hsv, np.array([90, 45, 25]), np.array([140, 255, 255]))
+    if blank_region is not None:
+        blank = cv2.cvtColor(blank_region, cv2.COLOR_BGR2GRAY)
+        if blank.shape != mask.shape:
+            blank = cv2.resize(blank, (mask.shape[1], mask.shape[0]))
+        printed = cv2.dilate(np.uint8(blank < 215) * 255, np.ones((9, 9), np.uint8))
+        mask[printed > 0] = 0
     if cv2.countNonZero(mask) < 40:
         return region, False
+    count, components, stats, _ = cv2.connectedComponentsWithStats(mask)
+    major = []
+    for component in range(1, count):
+        area = stats[component, cv2.CC_STAT_AREA]
+        if area >= 35:
+            major.append(component)
+    if not major:
+        return region, False
+    # Long dotted baselines sometimes acquire a weak blue cast in photos.
+    # Bound the crop by actual handwriting components, retaining small accents
+    # within that area but dropping distant dots and sensor noise.
+    left = min(stats[component, cv2.CC_STAT_LEFT] for component in major)
+    top = min(stats[component, cv2.CC_STAT_TOP] for component in major)
+    right = max(stats[component, cv2.CC_STAT_LEFT] + stats[component, cv2.CC_STAT_WIDTH] for component in major)
+    bottom = max(stats[component, cv2.CC_STAT_TOP] + stats[component, cv2.CC_STAT_HEIGHT] for component in major)
+    x1, x2 = max(0, left - 18), min(region.shape[1], right + 18)
+    y1, y2 = max(0, top - 18), min(region.shape[0], bottom + 18)
+    mask[:y1] = 0
+    mask[y2:] = 0
+    mask[:, :x1] = 0
+    mask[:, x2:] = 0
     mask = cv2.dilate(mask, np.ones((2, 2), np.uint8), iterations=1)
-    ys, xs = np.where(mask > 0)
-    pad = 12
-    x1, x2 = max(0, int(xs.min()) - pad), min(region.shape[1], int(xs.max()) + pad + 1)
-    y1, y2 = max(0, int(ys.min()) - pad), min(region.shape[0], int(ys.max()) + pad + 1)
     cleaned = np.full_like(region, 255)
     cleaned[mask > 0] = region[mask > 0]
     return cleaned[y1:y2, x1:x2], True
 
 
 def dark_handwriting_only(region: np.ndarray, blank_region: np.ndarray) -> tuple[np.ndarray, bool]:
-    """Subtract the registered blank form to isolate dark handwriting.
-
-    This is only an estimate. Real black ink on printed dots needs validation
-    with actual black-pen scans before its accuracy can be claimed.
-    """
+    """Remove printed text and dots using the registered blank template."""
     gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
     blank = cv2.cvtColor(blank_region, cv2.COLOR_BGR2GRAY)
     if blank.shape != gray.shape:
         blank = cv2.resize(blank, (gray.shape[1], gray.shape[0]))
-    difference = blank.astype(np.int16) - gray.astype(np.int16)
-    mask = np.uint8((difference > 65) & (gray < 170)) * 255
+    # Printing is slightly misregistered after homography. Cover its full
+    # stroke and a small halo before retaining dark pixels from the photo.
+    printed = np.uint8(blank < 215) * 255
+    printed = cv2.dilate(printed, np.ones((9, 9), np.uint8))
+    mask = np.uint8((gray < 175) & (printed == 0)) * 255
+    count, components, stats, _ = cv2.connectedComponentsWithStats(mask)
+    for component in range(1, count):
+        if stats[component, cv2.CC_STAT_AREA] < 16:
+            mask[components == component] = 0
     if cv2.countNonZero(mask) < 40:
         return region, False
     mask = cv2.dilate(mask, np.ones((2, 2), np.uint8), iterations=1)
@@ -129,7 +156,7 @@ def process_form(template: np.ndarray, source: Path, output: Path) -> list[dict[
         box = tuple(value * SCALE for value in (x1, y1, x2, y2))
         a, b, c, d = box
         region = aligned[b:d, a:c]
-        cleaned, blue_found = blue_handwriting_only(region)
+        cleaned, blue_found = blue_handwriting_only(region, scaled_template[b:d, a:c])
         if not blue_found:
             cleaned, _ = dark_handwriting_only(region, scaled_template[b:d, a:c])
         crop_file = form_dir / f"{field}.png"

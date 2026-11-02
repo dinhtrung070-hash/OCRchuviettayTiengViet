@@ -10,8 +10,10 @@ VietOCR vgg_transformer. Pass --weights PATH after fine-tuning is available.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
+import re
 import tempfile
 from functools import lru_cache
 from pathlib import Path
@@ -35,6 +37,11 @@ FIELD_LABELS = {
     "ton_giao": "Tôn giáo",
 }
 FIELD_ORDER = tuple(FIELDS)
+EXAMPLE_PATHS = [BASE_DIR / "phieu_da_viet.png", BASE_DIR / "phieudaviet1.png"]
+for local_form in (BASE_DIR / "forms" / "dataset_20261102" / "1.jpg",
+                   BASE_DIR / "forms" / "dataset_20261102" / "50.jpg"):
+    if local_form.is_file():
+        EXAMPLE_PATHS.append(local_form)
 
 
 def bgr_to_pil(image: np.ndarray) -> Image.Image:
@@ -95,7 +102,7 @@ def prepare_form(image_path: str) -> dict:
         for field, (x1, y1, x2, y2) in FIELDS.items():
             a, b, c, d = (v * SCALE for v in (x1, y1, x2, y2))
             region = aligned[b:d, a:c]
-            cleaned, has_blue = blue_handwriting_only(region)
+            cleaned, has_blue = blue_handwriting_only(region, scaled_template[b:d, a:c])
             has_dark = False
             if not has_blue:
                 cleaned, has_dark = dark_handwriting_only(region, scaled_template[b:d, a:c])
@@ -168,20 +175,43 @@ def recognize(prepared: dict, weights: str | None) -> dict[str, str]:
     }
 
 
+def validate_field(field: str, value: str) -> tuple[bool, str]:
+    if not value:
+        return False, "Trường đang trống"
+    if field == "ngay_sinh":
+        parts = re.split(r"[./-]", value.replace(" ", ""))
+        if len(parts) != 3 or not all(part.isdigit() for part in parts) or len(parts[2]) != 4:
+            return False, "Ngày sinh cần có dạng ngày/tháng/năm"
+        try:
+            datetime.date(int(parts[2]), int(parts[1]), int(parts[0]))
+        except ValueError:
+            return False, "Ngày sinh không hợp lệ"
+        return True, ""
+    if any(char.isdigit() for char in value):
+        return False, "Trường chữ có chứa chữ số"
+    if field == "ho_ten" and len(value.split()) < 2:
+        return False, "Họ tên cần ít nhất hai từ"
+    return True, ""
+
+
 def result_payload(prepared: dict, edited: dict[str, str], weights: str | None) -> dict:
     if not prepared or set(prepared["predictions"]) != set(FIELD_ORDER):
         raise ValueError("Hãy chạy VietOCR trên bốn crop đã xác nhận trước.")
     fields = {}
     for field in FIELD_ORDER:
         value = " ".join((edited.get(field) or "").split())
+        valid, message = validate_field(field, value)
         fields[field] = {
             "ocr_raw": prepared["predictions"][field],
             "confirmed": value,
             "crop_method": prepared["methods"][field],
+            "valid": valid,
+            "validation_message": message,
         }
     return {
         "form": prepared["form_name"],
         "model": "VietOCR vgg_transformer · fine-tuned" if weights else "VietOCR vgg_transformer · gốc",
+        "all_fields_valid": all(item["valid"] for item in fields.values()),
         "fields": fields,
     }
 
@@ -206,9 +236,9 @@ def build_app(weights: str | None = None) -> gr.Blocks:
                 height=300, buttons=["fullscreen"],
             )
             with gr.Column():
-                gr.Markdown("**Có thể thử ngay với hai phiếu mẫu:**")
+                gr.Markdown("**Có thể thử ngay với các phiếu mẫu trên máy:**")
                 gr.Examples(
-                    examples=[[str(BASE_DIR / "phieu_da_viet.png")], [str(BASE_DIR / "phieudaviet1.png")]],
+                    examples=[[str(path)] for path in EXAMPLE_PATHS],
                     inputs=upload,
                 )
                 prepare_button = gr.Button("1. Căn phiếu và cắt tự động", variant="primary")
@@ -355,10 +385,12 @@ def build_app(weights: str | None = None) -> gr.Blocks:
             output_dir = Path(tempfile.mkdtemp(prefix="vietocr_demo_"))
             output_file = output_dir / "result.json"
             output_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            return payload, str(output_file)
+            invalid = [FIELD_LABELS[key] for key, item in payload["fields"].items() if not item["valid"]]
+            message = ("Đã xuất JSON. Cần kiểm tra lại: " + ", ".join(invalid) + ".") if invalid else "Đã xuất JSON; bốn trường hợp lệ theo kiểm tra cơ bản."
+            return payload, str(output_file), message
 
         export_button.click(
-            on_export, inputs=[prepared_state, *text_boxes.values()], outputs=[json_view, json_file],
+            on_export, inputs=[prepared_state, *text_boxes.values()], outputs=[json_view, json_file, status],
         )
 
     return app

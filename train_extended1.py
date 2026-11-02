@@ -1,4 +1,4 @@
-"""Fine-tune VietOCR on writer-separated train/valid annotations.
+"""Fine-tune VietOCR on grouped train/valid annotations.
 
 Run prepare_dataset.py, label prepared/to_label.csv, then export_vietocr.py
 before using this script. The two-form pilot is handled by pilot_finetune.py.
@@ -75,6 +75,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=BASE_DIR / "prepared")
     parser.add_argument("--output", type=Path, default=BASE_DIR / "models" / "extended1_finetuned.pth")
+    parser.add_argument("--initial-weights", type=Path,
+                        help="Resume fine-tuning from a local checkpoint instead of pretrained VietOCR")
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--lr", type=float, default=0.000001)
     parser.add_argument("--scope", choices=["head", "transformer"], default="transformer")
@@ -92,7 +94,11 @@ def main() -> None:
     torch.manual_seed(args.seed)
     config = get_model_config(None)
     model, vocab = build_model(config)
-    if PRETRAINED_WEIGHTS.is_file():
+    if args.initial_weights is not None:
+        if not args.initial_weights.is_file():
+            parser.error(f"Missing initial weights: {args.initial_weights}")
+        initial = str(args.initial_weights)
+    elif PRETRAINED_WEIGHTS.is_file():
         initial = str(PRETRAINED_WEIGHTS)
     else:
         from vietocr.tool.utils import download_weights
@@ -108,7 +114,7 @@ def main() -> None:
     parameters = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(parameters, lr=args.lr)
     baseline = validate(model, vocab, valid_rows)
-    print(f"pretrained validation: {baseline}", flush=True)
+    print(f"initial validation: {baseline}", flush=True)
     best = None
     history = []
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -139,9 +145,12 @@ def main() -> None:
             best = score
     report = {
         "train_images": len(train_rows), "valid_images": len(valid_rows),
-        "scope": args.scope, "learning_rate": args.lr, "baseline_valid": baseline,
+        "scope": args.scope, "learning_rate": args.lr, "initial_valid": baseline,
+        "initial_weights": initial,
+        "trainable_parameters": sum(p.numel() for p in parameters),
+        "total_parameters": sum(p.numel() for p in model.parameters()),
         "history": history, "best_weights": str(args.output),
-        "note": "Validation must be split by writer. Evaluate a separate, untouched test set before claiming accuracy.",
+        "note": "For a writer-generalization claim, group by real writer ID; provisional form groups support only exploratory evaluation.",
     }
     args.output.with_suffix(".json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Saved best weights: {args.output}", flush=True)
