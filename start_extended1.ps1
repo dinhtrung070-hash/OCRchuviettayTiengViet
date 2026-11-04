@@ -2,7 +2,10 @@ param([int]$Port = 7861)
 
 $projectDir = $PSScriptRoot
 $pythonPath = Join-Path $projectDir '.venv\Scripts\python.exe'
-$modelPath = Join-Path $projectDir 'models\extended1_selected.pth'
+$modelPath = Join-Path $projectDir 'models\extended1_bundle.json'
+if (-not (Test-Path -LiteralPath $modelPath)) {
+    $modelPath = Join-Path $projectDir 'models\extended1_selected.pth'
+}
 $appPath = Join-Path $projectDir 'ocr_review_app.py'
 
 if (-not (Test-Path -LiteralPath $pythonPath)) {

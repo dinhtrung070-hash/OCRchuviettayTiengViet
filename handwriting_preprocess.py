@@ -101,6 +101,40 @@ def trim_ink(gray: np.ndarray, foreground: np.ndarray, pad: int = 10) -> np.ndar
                 max(0, left-pad):min(gray.shape[1], right+pad)]
 
 
+def clean_name_line(region: np.ndarray, blank_region: np.ndarray) -> np.ndarray:
+    """Keep the complete name while excluding distant fragments below its baseline."""
+    gray = normalize_paper(region)
+    cleaned, foreground = remove_isolated_dots(gray, blank_region)
+    blank = cv2.cvtColor(blank_region, cv2.COLOR_BGR2GRAY)
+    n, _, boxes, centers = cv2.connectedComponentsWithStats(np.uint8(blank < 190))
+    dots = [centers[i, 1] for i in range(1, n)
+            if 3 <= boxes[i, cv2.CC_STAT_AREA] <= 160 and boxes[i, cv2.CC_STAT_HEIGHT] <= 16
+            and boxes[i, cv2.CC_STAT_WIDTH] <= 16]
+    if len(dots) < 4:
+        return cv2.cvtColor(trim_ink(cleaned, foreground), cv2.COLOR_GRAY2BGR)
+    baseline = float(np.median(dots))
+    height, width = gray.shape
+    n, ids, stats, _ = cv2.connectedComponentsWithStats(foreground)
+    core = [i for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] >= 30
+            and stats[i, cv2.CC_STAT_HEIGHT] >= height*.14
+            and stats[i, cv2.CC_STAT_TOP] < baseline-8
+            and stats[i, cv2.CC_STAT_TOP]+stats[i, cv2.CC_STAT_HEIGHT] > baseline-height*.55]
+    if not core:
+        return cv2.cvtColor(trim_ink(cleaned, foreground), cv2.COLOR_GRAY2BGR)
+    margin = max(24, int(height*.22))
+    left = max(0, min(stats[i, cv2.CC_STAT_LEFT] for i in core)-margin)
+    right = min(width, max(stats[i, cv2.CC_STAT_LEFT]+stats[i, cv2.CC_STAT_WIDTH] for i in core)+margin)
+    keep = np.zeros_like(foreground)
+    for i in range(1, n):
+        x, y, w, h, area = stats[i]
+        if x+w >= left and x <= right and y <= baseline+height*.16:
+            keep[ids == i] = 255
+    output = cleaned.copy()
+    remove = cv2.dilate(np.uint8((foreground > 0) & (keep == 0)), np.ones((3, 3), np.uint8))
+    output[remove > 0] = 255
+    return cv2.cvtColor(trim_ink(output, keep), cv2.COLOR_GRAY2BGR)
+
+
 def clean_handwriting(region: np.ndarray, blank_region: np.ndarray | None = None,
                       mode: str = "chroma") -> tuple[np.ndarray, str]:
     gray = normalize_paper(region)

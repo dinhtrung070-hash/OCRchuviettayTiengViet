@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import csv
 from pathlib import Path
 
 from gradio_client import Client, handle_file
@@ -22,7 +23,9 @@ def main() -> None:
     root = Path(__file__).resolve().parent
     client = Client("http://127.0.0.1:7861/", verbose=False)
     expect_error(lambda: client.predict("fine_tuned", True, True, True, True, api_name="/on_ocr"), "kiểm tra crop")
-    cases = [root / "phieudaviet1.png", root / "forms/dataset_20261102/1.jpg", root / "forms/dataset_20261102/50.jpg"]
+    cases = [root / "phieu_da_viet.png", root / "phieudaviet1.png", root / "forms/dataset_20261102/1.jpg", root / "forms/dataset_20261102/50.jpg"]
+    with (root / "pilot_labels.csv").open(newline="", encoding="utf-8-sig") as handle:
+        pilot = {row["form"]: row for row in csv.DictReader(handle)}
     records = []
     for path in cases:
         if not path.is_file():
@@ -38,12 +41,19 @@ def main() -> None:
         payload, file_path, _ = client.predict(*values, api_name="/on_export")
         assert Path(file_path).is_file()
         assert payload["preprocess_version"] == "stroke_preserving_v2"
-        assert "extended1_selected.pth" in payload["model"]
-        selected = json.loads((root / "models/extended1_selected.json").read_text(encoding="utf-8"))
-        assert payload["model_metadata"]["sha256"] == selected["sha256"]
+        active = root / "models/extended1_bundle.json"
+        if active.is_file():
+            selected = json.loads(active.read_text(encoding="utf-8"))
+            assert payload["model"] == selected["name"]
+            for field, item in payload["fields"].items():
+                expected = selected["fields"].get(field, selected["base"])
+                assert item["recognition"]["model_metadata"]["sha256"] == expected["sha256"]
+        else:
+            selected = json.loads((root / "models/extended1_selected.json").read_text(encoding="utf-8"))
+            assert payload["model_metadata"]["sha256"] == selected["sha256"]
         assert all("ocr_raw" in item and "recognition" in item for item in payload["fields"].values())
-        if path.name == "phieudaviet1.png":
-            assert values == ("Bằng Văn Vũ", "12/03/1991", "Tày", "Không"), values
+        if path.name in pilot:
+            assert values == tuple(pilot[path.name][field] for field in payload["fields"]), values
         records.append({"form": path.name, "predictions": dict(zip(payload["fields"], values)), "payload": payload})
         print(path.name, values, flush=True)
     # Test manual crop and confirm that stale OCR can no longer be exported.
@@ -54,7 +64,8 @@ def main() -> None:
     result = client.predict("baseline", True, True, True, True, api_name="/on_ocr")
     payload, _, _ = client.predict(*result[-4:], api_name="/on_export")
     assert payload["model"].endswith("gốc")
-    (root / "models" / "smoke_v2.json").write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+    report_name = "smoke_v3.json" if (root / "models/extended1_bundle.json").is_file() else "smoke_v2.json"
+    (root / "models" / report_name).write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
     print("PASS: upload, crop versions, confirmation gate, both models, manual crop, JSON export.")
 
 

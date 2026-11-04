@@ -1,6 +1,7 @@
 """Fine-tune VietOCR with intact strokes, train-only augmentation and early stopping.
 
-The CNN stays frozen. Cached CNN features make a reproducible CPU run practical.
+Frozen CNN prefixes are cached; optional final blocks can be fine-tuned while
+batch normalization stays frozen. This keeps CPU runs practical.
 The old demo forms are explicitly replay training data, not independent validation.
 """
 
@@ -20,7 +21,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
-from vietocr.tool.translate import build_model, process_input
+from vietocr.tool.translate import process_input
+from model_runtime import build_model
+from handwriting_preprocess import PREPROCESS_VERSION
 
 from ocr_review_app import BASE_DIR, PRETRAINED_WEIGHTS, get_model_config
 from train_extended1 import edit_distance, read_annotations, read_regression
@@ -68,7 +71,7 @@ def cached_rows(model, rows, views: int, seed: int, prefix_only: bool = False) -
                 for view in range(views):
                     image = original if view == 0 else augment(original, random.Random(seed + index*101 + view))
                     tensor = process_input(image, 32, 32, 512)
-                    encoded = model.cnn.model.features[:40](tensor) if prefix_only else model.cnn(tensor)
+                    encoded = model.cnn.model.features[:model.form_cnn_cut](tensor) if prefix_only else model.cnn(tensor)
                     features.append(encoded.detach().clone())
             records.append({"path": str(path), "label": label, "features": features})
     return records
@@ -76,7 +79,7 @@ def cached_rows(model, rows, views: int, seed: int, prefix_only: bool = False) -
 
 def finish_features(model, features: torch.Tensor) -> torch.Tensor:
     if features.ndim == 4:
-        conv = model.cnn.model.features[40:](features)
+        conv = model.cnn.model.features[getattr(model, "form_cnn_cut", 40):](features)
         conv = model.cnn.model.last_conv_1x1(conv)
         return conv.transpose(-1, -2).flatten(2).permute(-1, 0, 1)
     return features
@@ -138,17 +141,35 @@ def main() -> None:
     parser.add_argument("--cnn-lr-ratio", type=float, default=.1)
     parser.add_argument("--name-repeat", type=int, default=1,
                         help="Oversample name crops to emphasize variable names over repeated short fields")
+    parser.add_argument("--date-repeat", type=int, default=1)
+    parser.add_argument("--cnn-cut", type=int, choices=[14, 27, 40], default=40,
+                        help="First trainable VGG feature layer when cnn-last-block is enabled")
+    parser.add_argument("--smoothing", type=float, default=.05)
+    parser.add_argument("--clean-probability", type=float, default=0,
+                        help="Probability of choosing the clean view first; remaining draws sample all views")
+    parser.add_argument("--fields", nargs="+", choices=["ho_ten", "ngay_sinh", "dan_toc", "ton_giao"])
+    parser.add_argument("--extra-train", help="Optional extra annotation file inside data-dir, from training forms only")
+    parser.add_argument("--whole-line-repeat", type=int, default=1,
+                        help="Repeat original line crops relative to supplemental word crops")
     args = parser.parse_args()
-    if min(args.epochs, args.patience, args.threads, args.views, args.name_repeat) < 1 or args.lr <= 0 or args.cnn_lr_ratio <= 0:
+    if min(args.epochs, args.patience, args.threads, args.views, args.name_repeat, args.date_repeat, args.whole_line_repeat) < 1 or args.lr <= 0 or args.cnn_lr_ratio <= 0:
         parser.error("Training settings must be positive")
+    if not 0 <= args.smoothing < 1 or not 0 <= args.clean_probability <= 1:
+        parser.error("smoothing and clean-probability must be in their probability ranges")
     if args.stop_after is not None and args.stop_after < 1:
         parser.error("stop-after must be positive")
     torch.set_num_threads(args.threads)
     torch.manual_seed(args.seed)
     random.seed(args.seed)
     train = read_annotations(args.data_dir, "train_annotation.txt")
+    if args.extra_train:
+        train += read_annotations(args.data_dir, args.extra_train)
     valid = read_annotations(args.data_dir, "valid_annotation.txt")
     replay = read_regression(args.data_dir / "pilot")
+    if args.fields:
+        train = [(p, label) for p, label in train if p.stem in args.fields]
+        valid = [(p, label) for p, label in valid if p.stem in args.fields]
+        replay = [(p, label) for p, label in replay if p.stem in args.fields]
     if {p for p, _ in train + replay} & {p for p, _ in valid}:
         raise ValueError("Train/valid overlap")
     config = get_model_config(None)
@@ -159,8 +180,12 @@ def main() -> None:
         shutil.copyfile(downloaded, PRETRAINED_WEIGHTS)
     model, vocab = build_model(config)
     model.load_state_dict(torch.load(PRETRAINED_WEIGHTS, map_location="cpu", weights_only=True))
-    cache_path = args.data_dir / ("cnn_prefix_features_v2.pt" if args.cnn_last_block else "cnn_features_v2.pt")
-    fingerprint = source_fingerprint(train + valid + replay, PRETRAINED_WEIGHTS, args.views, args.seed) + str(args.cnn_last_block)
+    if args.initial_weights:
+        model.load_state_dict(torch.load(args.initial_weights, map_location="cpu", weights_only=True))
+    model.form_cnn_cut = args.cnn_cut
+    cache_suffix = (f"prefix{args.cnn_cut}" if args.cnn_last_block else "full") + ("_" + "_".join(args.fields) if args.fields else "")
+    cache_path = args.data_dir / f"cnn_features_v3_{cache_suffix}.pt"
+    fingerprint = source_fingerprint(train + valid + replay, args.initial_weights or PRETRAINED_WEIGHTS, args.views, args.seed) + cache_suffix
     cache = torch.load(cache_path, weights_only=False) if cache_path.is_file() else {}
     if cache.get("fingerprint") != fingerprint:
         print("Caching train-only augmented CNN features ...", flush=True)
@@ -169,15 +194,13 @@ def main() -> None:
                  "valid": cached_rows(model, valid, 1, args.seed, args.cnn_last_block),
                  "replay": cached_rows(model, replay, args.views, args.seed, args.cnn_last_block)}
         torch.save(cache, cache_path)
-    if args.initial_weights:
-        model.load_state_dict(torch.load(args.initial_weights, map_location="cpu", weights_only=True))
     for parameter in model.cnn.parameters():
         parameter.requires_grad = False
     parameters = list(model.transformer.parameters())
     groups = [{"params": parameters, "lr_ratio": 1.0}]
     if args.cnn_last_block:
         cnn_parameters = []
-        for module in list(model.cnn.model.features[40:]) + [model.cnn.model.last_conv_1x1]:
+        for module in list(model.cnn.model.features[args.cnn_cut:]) + [model.cnn.model.last_conv_1x1]:
             if isinstance(module, torch.nn.Conv2d):
                 for parameter in module.parameters():
                     parameter.requires_grad = True
@@ -187,9 +210,15 @@ def main() -> None:
     optimizer = torch.optim.AdamW(groups, lr=args.lr, betas=(.9, .98), eps=1e-9, weight_decay=1e-4)
     initial_valid = evaluate(model, vocab, cache["valid"])
     initial_replay = evaluate(model, vocab, cache["replay"])
-    report = {"data_dir": str(args.data_dir), "preprocess": "stroke_preserving_v2", "cnn_frozen": not args.cnn_last_block,
+    profile = args.data_dir / "preprocess.json"
+    version = json.loads(profile.read_text(encoding="utf-8"))["version"] if profile.is_file() else PREPROCESS_VERSION
+    report = {"data_dir": str(args.data_dir), "preprocess": version, "cnn_frozen": not args.cnn_last_block,
               "cnn_last_block_lr_ratio": args.cnn_lr_ratio if args.cnn_last_block else None,
               "name_repeat": args.name_repeat,
+              "date_repeat": args.date_repeat, "fields": args.fields,
+              "extra_train": args.extra_train, "whole_line_repeat": args.whole_line_repeat,
+              "smoothing": args.smoothing, "clean_probability": args.clean_probability,
+              "cnn_cut": args.cnn_cut if args.cnn_last_block else None,
               "planned_epochs": args.epochs, "stop_after": args.stop_after,
               "optimizer_reset_from_initial_checkpoint": bool(args.initial_weights),
               "initial_weights": str(args.initial_weights or PRETRAINED_WEIGHTS),
@@ -210,6 +239,8 @@ def main() -> None:
         # Repeat old forms to retain recognizer behavior on the original demo.
         sequence = cache["train"] + cache["replay"] * 2
         sequence += [row for row in cache["train"] if Path(row["path"]).stem == "ho_ten"] * (args.name_repeat-1)
+        sequence += [row for row in cache["train"] if Path(row["path"]).stem == "ngay_sinh"] * (args.date_repeat-1)
+        sequence += [row for row in cache["train"] if not {"word_crops", "synthetic_names", "synthetic_dates"} & set(Path(row["path"]).parts)] * (args.whole_line_repeat-1)
         rng = random.Random(args.seed + epoch)
         rng.shuffle(sequence)
         lr = args.lr * min(1.0, (epoch + 1) / 2) * (.3 + .7 * .5 * (1 + math.cos(math.pi * epoch / args.epochs)))
@@ -218,7 +249,8 @@ def main() -> None:
         optimizer.zero_grad(set_to_none=True)
         losses = []
         for index, record in enumerate(sequence):
-            loss = forward_loss(model, vocab, record, rng.randrange(len(record["features"])), smoothing=.05)
+            view = 0 if rng.random() < args.clean_probability else rng.randrange(len(record["features"]))
+            loss = forward_loss(model, vocab, record, view, smoothing=args.smoothing)
             group_size = min(8, len(sequence) - (index // 8) * 8)
             (loss / group_size).backward()
             losses.append(float(loss.detach()))

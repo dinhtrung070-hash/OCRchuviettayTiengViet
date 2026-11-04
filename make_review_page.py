@@ -50,7 +50,11 @@ def main() -> None:
             if evaluation:
                 base = predictions["baseline"][(form, row["field"])]
                 tuned = predictions["fine_tuned"][(form, row["field"])]
+                previous = next((item for item in evaluation.get("previous_v2", {}).get("rows", [])
+                                 if item["form"] == form and item["field"] == row["field"]), None)
+                previous_html = f'V2: <b>{html.escape(previous["predicted"])}</b><br>' if previous else ""
                 result_html = (f'<p>Gốc: <b>{html.escape(base["predicted"])}</b><br>'
+                               + previous_html +
                                f'Fine-tune, OCR thô: <b>{html.escape(tuned["predicted"])}</b><br>'
                                f'Kết quả có cấu trúc: <b>{html.escape(tuned.get("structured_value", tuned["predicted"]))}</b><br>'
                                f'Khớp toàn chuỗi OCR thô: {"ĐÚNG" if tuned["exact"] else "SAI"}</p>')
@@ -65,7 +69,11 @@ def main() -> None:
     summary = '<h1>Kiểm tra nhãn và crop</h1>'
     if evaluation:
         summary = '<h1>Đối chiếu VietOCR gốc và fine-tune</h1>'
-        for model, name in (("baseline", "Gốc"), ("fine_tuned", "Fine-tune")):
+        models = [("baseline", "Gốc")]
+        if "previous_v2" in evaluation:
+            models.append(("previous_v2", "Fine-tune v2"))
+        models.append(("fine_tuned", "Fine-tune đang dùng"))
+        for model, name in models:
             stats = evaluation[model]
             summary += (f'<p><b>{name}</b>: OCR thô đúng {stats["correct"]}/{stats["total"]}, CER {stats["cer"]:.1%}; '
                         f'có định dạng/danh mục đúng {stats.get("structured_correct", stats["correct"])}/{stats["total"]}.</p>')

@@ -10,9 +10,8 @@ from pathlib import Path
 
 import torch
 from PIL import Image
-from vietocr.tool.predictor import Predictor
 
-from ocr_review_app import BASE_DIR, get_model_config
+from ocr_review_app import BASE_DIR, get_field_predictor
 from train_extended1 import read_annotations
 from field_inference import normalize_value, predict_field
 from handwriting_preprocess import PREPROCESS_VERSION
@@ -41,11 +40,10 @@ def summarize(rows: list[dict]) -> dict:
 
 
 def run(weights: Path | None, rows: list[tuple[Path, str]], metadata: dict[str, dict], decoder: str = "greedy", structured: bool = False) -> dict:
-    config = get_model_config(str(weights.resolve()) if weights else None)
-    predictor = Predictor(config)
     results = []
     for image_path, label in rows:
         info = metadata[image_path.relative_to(metadata["_root"]).as_posix()]
+        predictor = get_field_predictor(str(weights.resolve()) if weights else None, info["field"])
         with Image.open(image_path) as image:
             detail = predict_field(predictor, image, info["field"], decoder, structured)
             prediction = detail["raw"]
@@ -58,6 +56,7 @@ def run(weights: Path | None, rows: list[tuple[Path, str]], metadata: dict[str, 
                         "structured_value": detail["value"], "structured_proposal": detail["structured_proposal"],
                         "structured_exact": detail["value"].casefold() == normalize_value(info["field"], label).casefold(),
                         "model_score": detail["model_score"],
+                        "model_metadata": predictor.form_metadata,
                         "edit_distance": edit_distance(label, prediction)})
     summary = summarize(results)
     summary["by_field"] = {field: summarize([row for row in results if row["field"] == field])
@@ -77,6 +76,7 @@ def main() -> None:
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--decoder", choices=["greedy", "beam"], default="greedy")
     parser.add_argument("--structured", action="store_true", help="Also evaluate model-based field/date proposals separately from raw OCR")
+    parser.add_argument("--previous-weights", type=Path, help="Optional previous checkpoint, evaluated on the same crops")
     args = parser.parse_args()
     if not args.weights.is_file():
         parser.error(f"Missing fine-tuned weights: {args.weights}")
@@ -89,8 +89,10 @@ def main() -> None:
     tuned = run(args.weights, rows, metadata, args.decoder, args.structured)
     split_path = args.data_dir / "split_manifest.json"
     split_info = json.loads(split_path.read_text(encoding="utf-8")) if split_path.is_file() else {}
+    profile = args.data_dir / "preprocess.json"
+    version = json.loads(profile.read_text(encoding="utf-8"))["version"] if profile.is_file() else PREPROCESS_VERSION
     report = {"split": args.split, "group_type": split_info.get("group_type", "unknown"),
-              "preprocess_version": PREPROCESS_VERSION, "weights": str(args.weights.resolve()),
+              "preprocess_version": version, "weights": str(args.weights.resolve()),
               "decoder": args.decoder,
               "structured_decoding": args.structured,
               "structured_metric": "Case-insensitive field values after image-conditioned date grammar/vocabulary proposals; reported separately from raw OCR.",
@@ -99,6 +101,8 @@ def main() -> None:
               "formatted_metric": "Ignore letter case; standardize valid numeric dates. No fuzzy replacements or suggestions are counted as correct.",
               "limits": "Writer IDs unknown; reused test supports exploratory evaluation only.",
               "baseline": baseline, "fine_tuned": tuned}
+    if args.previous_weights:
+        report["previous_v2"] = run(args.previous_weights, rows, metadata, args.decoder, args.structured)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"baseline": {k: baseline[k] for k in ("correct", "total")},

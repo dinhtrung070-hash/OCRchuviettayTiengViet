@@ -1,6 +1,11 @@
 """Regression checks for stroke preservation, formatting and review/export state."""
 
 import unittest
+import json
+import hashlib
+import tempfile
+from types import SimpleNamespace
+from unittest.mock import patch
 from pathlib import Path
 
 import cv2
@@ -9,9 +14,10 @@ from PIL import Image
 
 from field_inference import normalize_value
 from structured_decode import propose, valid_date
+from field_bundle import resolve_model
 from handwriting_preprocess import remove_isolated_dots
 from ocr_review_app import (BASE_DIR, prepare_form, result_payload, select_crop_version,
-                            validate_field)
+                            validate_field, get_field_predictor)
 
 
 class Extended1Tests(unittest.TestCase):
@@ -88,6 +94,38 @@ class Extended1Tests(unittest.TestCase):
         self.assertFalse(groups["train"] & groups["valid"])
         self.assertFalse(groups["train"] & groups["test"])
         self.assertFalse(groups["valid"] & groups["test"])
+
+    def test_field_bundle_routes_only_the_requested_expert(self):
+        workspace = BASE_DIR / "prepared"
+        workspace.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=workspace) as temporary:
+            root = Path(temporary).resolve()
+            self.assertTrue(root.is_relative_to(BASE_DIR.resolve()))
+            (root / "base.pth").write_bytes(b"base")
+            (root / "date.pth").write_bytes(b"date")
+            base = {"weights": "base.pth", "sha256": hashlib.sha256(b"base").hexdigest()}
+            date = {"weights": "date.pth", "sha256": hashlib.sha256(b"date").hexdigest()}
+            manifest = root / "bundle.json"
+            manifest.write_text(json.dumps({"format": "vietocr_field_bundle_v1", "base": base,
+                                            "fields": {"ngay_sinh": date}}), encoding="utf-8")
+            self.assertEqual(resolve_model(str(manifest), "ho_ten"), (str(root / "base.pth"), base["sha256"]))
+            self.assertEqual(resolve_model(str(manifest), "ngay_sinh"), (str(root / "date.pth"), date["sha256"]))
+            with patch("ocr_review_app.get_predictor", return_value=SimpleNamespace(form_metadata={"sha256": "0"*64})):
+                with self.assertRaises(ValueError):
+                    get_field_predictor(str(manifest), "ngay_sinh")
+
+    def test_derived_name_images_use_only_training_forms(self):
+        source = BASE_DIR / "prepared" / "extended1_v2"
+        audit_path = source / "word_crop_audit.json"
+        if not audit_path.is_file():
+            self.skipTest("Local augmentation audit not included in repository")
+        groups = {Path(line.split("\t")[0]).parts[0] for line in (source / "train_annotation.txt").read_text(encoding="utf-8").splitlines()}
+        audit = json.loads(audit_path.read_text(encoding="utf-8"))
+        self.assertTrue(all(Path(row["source"]).parts[0] in groups for row in audit["records"]))
+        synthetic = BASE_DIR / "prepared" / "extended1_v3" / "synthetic_name_audit.json"
+        if synthetic.is_file():
+            records = json.loads(synthetic.read_text(encoding="utf-8"))["records"]
+            self.assertTrue(all(set(row["source_training_forms"]) <= groups for row in records))
 
 
 if __name__ == "__main__":

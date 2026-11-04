@@ -31,11 +31,11 @@ Mở <http://127.0.0.1:7860>. Hai phiếu `phieu_da_viet.png` và `phieudaviet1.
 
 Demo mặc định dùng **VietOCR vgg_transformer pretrained**, chưa phải mô hình đã fine-tune. Repo không chứa file trọng số 145 MB; nếu chưa có `models/pretrained_vgg_transformer.pth`, VietOCR tải trọng số gốc từ URL trong `models/vgg_transformer.yml` ở lần OCR đầu tiên. Cần Internet cho lần tải này. Khi đã có trọng số fine-tune, chạy `ocr_review_app.py --weights đường_dẫn_đến_file.pth` để dùng trọng số mới. Toàn bộ demo chỉ phục vụ trên máy này (`127.0.0.1`), chạy bằng CPU nên lần OCR đầu có thể chậm.
 
-Trên máy đã train Extended 1, chạy `.\start_extended1.ps1` rồi mở <http://127.0.0.1:7861>. Mặc định dùng **Fine-tune Extended 1** (`models/extended1_selected.pth`), có thể chọn model gốc để so cùng crop. File trọng số chỉ có ở máy đã train; nhóm cần nhận riêng nếu muốn chạy trên máy khác. Nếu cổng đã có demo đang chạy thì mở trang, không khởi động thêm.
+Trên máy đã train Extended 1, chạy `.\start_extended1.ps1` rồi mở <http://127.0.0.1:7861>. Mặc định dùng **Fine-tune Extended 1 v3** qua `models/extended1_bundle.json`: checkpoint ngày sinh riêng, ba trường khác dùng v2. Có thể chọn model gốc để so cùng crop. Nếu chưa có bundle nhưng có `extended1_selected.pth`, script dùng lại v2. File trọng số chỉ có ở máy train; nhóm cần nhận riêng. Nếu cổng đã có demo đang chạy thì mở trang, không khởi động thêm.
 
 Hai phiếu mẫu cũ vẫn có thể dùng để thử giao diện. Bộ 50 phiếu có cả bút xanh và bút đen. Kết quả so sánh model gốc và bản fine-tune trên tập test được ghi trong [EXTENDED1_STATUS.md](EXTENDED1_STATUS.md).
 
-**Kết quả mới:** trên cùng 28 crop test, model gốc đúng toàn chuỗi 2/28 và bản fine-tune đúng 10/28; CER 45,6% → 25,5%. Khi bổ sung định dạng/giải mã theo trường, kết quả fine-tune là 14/28. Đây là đánh giá khảo sát trên tập test đã được xem ở các lần thử trước; chưa có ID người viết thật. Hướng dẫn chuẩn bị dữ liệu, train lại và xem từng dự đoán nằm ở [EXTENDED1_STATUS.md](EXTENDED1_STATUS.md).
+**Kết quả mới:** trên cùng 28 crop test, model gốc đúng toàn chuỗi 2/28, v2 đúng 10/28, v3 đúng 11/28; CER tương ứng 45,6%, 25,5%, 24,7%. Sau định dạng/giải mã trường, v3 đạt 15/28. Đây là khảo sát trên tập test đã được dùng nhiều lần; chưa có ID người viết thật. Chi tiết chín lượt train thêm và nhánh được chọn ở [FINETUNE_V3.md](FINETUNE_V3.md); hồ sơ chuẩn bị dữ liệu và v2 ở [EXTENDED1_STATUS.md](EXTENDED1_STATUS.md).
 
 ## Chạy với hai ảnh mẫu
 

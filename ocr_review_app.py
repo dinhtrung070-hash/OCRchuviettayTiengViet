@@ -25,6 +25,7 @@ import numpy as np
 from PIL import Image
 
 from field_inference import normalize_value, predict_field
+from field_bundle import load_bundle, resolve_model
 from handwriting_preprocess import PREPROCESS_VERSION, clean_handwriting
 from prepare_dataset import (FIELDS, LEGACY_FIELDS, SCALE, detect_layout,
                              extract_handwriting, blue_handwriting_only, read_image)
@@ -79,10 +80,10 @@ def get_model_config(weights: str | None):
     return config
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=4)
 def get_predictor(weights: str | None):
     import torch
-    from vietocr.tool.predictor import Predictor
+    from model_runtime import Predictor
 
     torch.set_num_threads(4)
     config = get_model_config(weights)
@@ -91,6 +92,22 @@ def get_predictor(weights: str | None):
     predictor.form_metadata = {"weights": source.name if source.is_file() else config["weights"],
                                "sha256": hashlib.sha256(source.read_bytes()).hexdigest() if source.is_file() else None}
     return predictor
+
+
+def get_field_predictor(weights: str | None, field: str):
+    resolved, checksum = resolve_model(weights, field)
+    predictor = get_predictor(resolved)
+    if checksum and predictor.form_metadata["sha256"] != checksum:
+        raise ValueError(f"Checkpoint cho {FIELD_LABELS[field]} không khớp checksum bundle")
+    return predictor
+
+
+def model_identity(weights: str | None) -> dict:
+    if weights and Path(weights).suffix.lower() == ".json":
+        data = load_bundle(str(Path(weights).resolve()))
+        return {"name": data["name"], "base": data["base"], "fields": data["fields"],
+                "preprocess_version": data["preprocess_version"]}
+    return get_predictor(weights).form_metadata
 
 
 def prepare_form(image_path: str) -> dict:
@@ -120,7 +137,7 @@ def prepare_form(image_path: str) -> dict:
         for field, (x1, y1, x2, y2) in field_boxes.items():
             a, b, c, d = (v * SCALE for v in (x1, y1, x2, y2))
             region = aligned[b:d, a:c]
-            cleaned, ink = extract_handwriting(region, scaled_template[b:d, a:c], layout)
+            cleaned, ink = extract_handwriting(region, scaled_template[b:d, a:c], layout, field)
             raw_crops[field] = bgr_to_pil(region)
             crops[field] = bgr_to_pil(cleaned)
             methods[field] = (
@@ -222,11 +239,12 @@ def recognize_detailed(prepared: dict, weights: str | None) -> dict[str, dict]:
     for field in FIELD_ORDER:
         if prepared["crops"].get(field) is None:
             raise ValueError(f"Chưa có crop cho trường {FIELD_LABELS[field]}.")
-    predictor = get_predictor(weights)
-    return {
-        field: predict_field(predictor, prepared["crops"][field], field)
-        for field in FIELD_ORDER
-    }
+    results = {}
+    for field in FIELD_ORDER:
+        predictor = get_field_predictor(weights, field)
+        results[field] = predict_field(predictor, prepared["crops"][field], field)
+        results[field]["model_metadata"] = predictor.form_metadata
+    return results
 
 
 def validate_field(field: str, value: str) -> tuple[bool, str]:
@@ -459,8 +477,8 @@ def build_app(weights: str | None = None, compare_weights: str | None = None,
             updated = dict(state)
             updated["predictions"] = predictions
             updated["prediction_details"] = details
-            updated["model_metadata"] = get_predictor(selected_weights).form_metadata
-            updated["model_name"] = (f"VietOCR vgg_transformer · {Path(selected_weights).name}" if selected_weights
+            updated["model_metadata"] = model_identity(selected_weights)
+            updated["model_name"] = (updated["model_metadata"].get("name", f"VietOCR vgg_transformer · {Path(selected_weights).name}") if selected_weights
                                      else "VietOCR vgg_transformer · gốc")
             notes = []
             for field, item in details.items():
@@ -508,17 +526,25 @@ def build_app(weights: str | None = None, compare_weights: str | None = None,
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--weights", help="Path to fine-tuned VietOCR weights; omit for pretrained baseline")
-    parser.add_argument("--compare-weights", help="Optional fine-tuned weights selectable beside the original model")
+    parser.add_argument("--weights", help="Path to VietOCR .pth weights or field-bundle .json")
+    parser.add_argument("--compare-weights", help="Fine-tuned checkpoint/bundle selectable beside the original model")
     parser.add_argument("--default-model", choices=["baseline", "fine_tuned"], default="baseline")
     parser.add_argument("--port", type=int, default=7860)
     args = parser.parse_args()
+    if args.weights and args.compare_weights:
+        parser.error("Chỉ dùng một trong --weights hoặc --compare-weights")
     weights = os.path.abspath(args.weights) if args.weights else None
     compare_weights = os.path.abspath(args.compare_weights) if args.compare_weights else None
     if weights and not Path(weights).is_file():
         parser.error(f"Không tìm thấy file trọng số: {weights}")
     if compare_weights and not Path(compare_weights).is_file():
         parser.error(f"Không tìm thấy file trọng số: {compare_weights}")
+    for artifact in (weights, compare_weights):
+        if artifact and Path(artifact).suffix.lower() == ".json":
+            try:
+                load_bundle(artifact)
+            except ValueError as exc:
+                parser.error(str(exc))
     app = build_app(weights, compare_weights, args.default_model)
     app.launch(server_name="127.0.0.1", server_port=args.port, share=False, show_error=True)
 

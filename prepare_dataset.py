@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -15,7 +16,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from handwriting_preprocess import clean_handwriting
+from handwriting_preprocess import PREPROCESS_VERSION, clean_handwriting
 
 
 # Coordinates on Demo/phieu_mau.png (863 x 242). Keep the printed labels out.
@@ -99,7 +100,7 @@ def legacy_reference(path: str) -> np.ndarray:
     return cv2.resize(original, None, fx=ratio, fy=ratio, interpolation=cv2.INTER_AREA)
 
 
-def extract_handwriting(region: np.ndarray, blank_region: np.ndarray, layout: str) -> tuple[np.ndarray, str]:
+def extract_handwriting(region: np.ndarray, blank_region: np.ndarray, layout: str, field: str | None = None) -> tuple[np.ndarray, str]:
     """Use the same crop cleaning for dataset generation and live inference."""
     if layout == "current":
         return clean_handwriting(region, blank_region, mode="dots")
@@ -204,7 +205,7 @@ def process_form(template: np.ndarray, source: Path, output: Path) -> list[dict[
         box = tuple(value * SCALE for value in (x1, y1, x2, y2))
         a, b, c, d = box
         region = aligned[b:d, a:c]
-        cleaned, ink = extract_handwriting(region, scaled_template[b:d, a:c], layout)
+        cleaned, ink = extract_handwriting(region, scaled_template[b:d, a:c], layout, field)
         write_image(form_dir / f"{field}_raw.png", region)
         crop_file = form_dir / f"{field}.png"
         write_image(crop_file, cleaned)
@@ -273,6 +274,8 @@ def main() -> None:
         writer = csv.DictWriter(handle, fieldnames=["form", "writer_id", "field", "image", "label", "blue_ink_detected", "alignment_inliers", "layout"])
         writer.writeheader()
         writer.writerows(rows)
+    (args.output_dir / "preprocess.json").write_text(json.dumps({"version": PREPROCESS_VERSION,
+        "fields": FIELDS, "legacy_fields": LEGACY_FIELDS, "scale": SCALE}, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Manifest contains {len(rows)} crops: {manifest}")
 
 

@@ -1,6 +1,8 @@
 # Extended 1 · kết quả thực chạy ngày 04/11/2026
 
-Đã triển khai và tự kiểm thử luồng tải ảnh → căn/crop → xem ảnh xử lý chấm hoặc crop gốc → sửa crop tay → xác nhận crop → chọn VietOCR gốc/fine-tune → sửa nội dung → xuất JSON. Demo mặc định dùng checkpoint fine-tune v2. **Kết quả đã cải thiện, nhưng nhận dạng tự động vẫn chưa đủ chính xác để bỏ bước người dùng kiểm tra.**
+**Cập nhật mới nhất: bundle v3.** Sau chín lượt train thêm, demo dùng checkpoint ngày sinh riêng và giữ checkpoint v2 cho ba trường còn lại. Valid OCR thô tăng 13 → 15/28; test tăng 10 → 11/28, CER test 25,5% → 24,7%. Sau giải mã trường, test tăng 14 → 15/28. Xem [FINETUNE_V3.md](FINETUNE_V3.md) để biết từng lượt thử, model đang dùng và cách tái hiện.
+
+Đã triển khai và tự kiểm thử luồng tải ảnh → căn/crop → xem ảnh xử lý chấm hoặc crop gốc → sửa crop tay → xác nhận crop → chọn VietOCR gốc/fine-tune → sửa nội dung → xuất JSON. **Nhận dạng tự động vẫn chưa đủ chính xác để bỏ bước người dùng kiểm tra.** Các phần dưới giữ lại hồ sơ của lượt v2 để đối chiếu; hướng dẫn model đang dùng xem tài liệu v3 ở trên.
 
 ## Thay đổi ở ảnh đầu vào
 
