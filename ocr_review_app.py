@@ -25,7 +25,7 @@ import numpy as np
 from PIL import Image
 
 from field_inference import normalize_value, predict_field
-from field_bundle import load_bundle, resolve_model
+from field_bundle import load_bundle, resolve_model, category_policy
 from handwriting_preprocess import PREPROCESS_VERSION, clean_handwriting
 from prepare_dataset import (FIELDS, LEGACY_FIELDS, SCALE, detect_layout,
                              extract_handwriting, blue_handwriting_only, read_image)
@@ -109,6 +109,8 @@ def model_identity(weights: str | None) -> dict:
                     "preprocess_version": data["preprocess_version"]}
         if "initializations" in data:
             identity["initializations"] = data["initializations"]
+        if "category_policies" in data:
+            identity["category_policies"] = data["category_policies"]
         return identity
     return get_predictor(weights).form_metadata
 
@@ -245,7 +247,8 @@ def recognize_detailed(prepared: dict, weights: str | None) -> dict[str, dict]:
     results = {}
     for field in FIELD_ORDER:
         predictor = get_field_predictor(weights, field)
-        results[field] = predict_field(predictor, prepared["crops"][field], field)
+        results[field] = predict_field(predictor, prepared["crops"][field], field,
+                                       category_policy=category_policy(weights, field))
         results[field]["model_metadata"] = predictor.form_metadata
     return results
 
@@ -302,20 +305,22 @@ def result_payload(prepared: dict, edited: dict[str, str], weights: str | None) 
 
 def build_app(weights: str | None = None, compare_weights: str | None = None,
               default_model: str = "baseline") -> gr.Blocks:
-    previous_weights = None
-    previous_path = BASE_DIR / "models" / "extended1_v3_previous_bundle.json"
-    if compare_weights and previous_path.is_file() and Path(compare_weights).resolve() != previous_path.resolve():
-        try:
-            load_bundle(str(previous_path.resolve()))
-        except (ValueError, OSError):
-            pass
-        else:
-            previous_weights = str(previous_path.resolve())
     current_label = (load_bundle(str(Path(compare_weights).resolve())).get("name", "Fine-tune hiện tại")
                      if compare_weights and Path(compare_weights).suffix.lower() == ".json" else "Fine-tune hiện tại")
     model_options = [("VietOCR gốc", "baseline"), (current_label, "fine_tuned")]
-    if previous_weights:
-        model_options.append(("Fine-tune v3 · đối chiếu", "previous"))
+    previous_models = {}
+    if compare_weights:
+        for version, key in ((4, "previous_v4"), (3, "previous")):
+            previous_path = BASE_DIR / "models" / f"extended1_v{version}_previous_bundle.json"
+            if not previous_path.is_file() or Path(compare_weights).resolve() == previous_path.resolve():
+                continue
+            try:
+                history = load_bundle(str(previous_path.resolve()))
+            except (ValueError, OSError, KeyError, TypeError):
+                continue
+            if history.get("name") != current_label:
+                previous_models[key] = str(previous_path.resolve())
+                model_options.append((f"Fine-tune v{version} · đối chiếu", key))
     model_note = (
         "Có thể chọn VietOCR gốc hoặc bản fine-tune Extended 1 để so trên cùng ảnh crop."
         if compare_weights else
@@ -483,10 +488,8 @@ def build_app(weights: str | None = None, compare_weights: str | None = None,
         def on_ocr(state, selected_model, *confirmation_values):
             if not all(confirmation_values):
                 raise gr.Error("Hãy xác nhận Crop đúng cho cả bốn trường trước khi OCR.")
-            if selected_model == "previous":
-                if not previous_weights:
-                    raise gr.Error("Chưa có đủ trọng số của bản v3 để đối chiếu.")
-                selected_weights = previous_weights
+            if selected_model in previous_models:
+                selected_weights = previous_models[selected_model]
             elif selected_model == "fine_tuned":
                 selected_weights = compare_weights or weights
             elif selected_model == "baseline":

@@ -48,6 +48,8 @@ def main() -> None:
             for field, item in payload["fields"].items():
                 expected = selected["fields"].get(field, selected["base"])
                 assert item["recognition"]["model_metadata"]["sha256"] == expected["sha256"]
+                policy = selected.get("category_policies", {}).get(field)
+                assert item["recognition"].get("category_policy") == policy
         else:
             selected = json.loads((root / "models/extended1_selected.json").read_text(encoding="utf-8"))
             assert payload["model_metadata"]["sha256"] == selected["sha256"]
@@ -68,6 +70,16 @@ def main() -> None:
             records[-1]["previous_v3"] = {"predictions": dict(zip(old_payload["fields"], result[-4:])),
                                           "model_metadata": old_payload["model_metadata"]}
             print("v3 comparison", path.name, result[-4:], flush=True)
+        previous_v4 = root / "models/extended1_v4_previous_bundle.json"
+        if previous_v4.is_file() and path.name == "50.jpg" and selected.get("name") != "VietOCR Extended 1 v4":
+            old = json.loads(previous_v4.read_text(encoding="utf-8"))
+            result = client.predict("previous_v4", True, True, True, True, api_name="/on_ocr")
+            old_payload, _, _ = client.predict(*result[-4:], api_name="/on_export")
+            assert old_payload["model"] == old["name"]
+            assert all("category_policy" not in item["recognition"] for item in old_payload["fields"].values())
+            records[-1]["previous_v4"] = {"predictions": dict(zip(old_payload["fields"], result[-4:])),
+                                          "model_metadata": old_payload["model_metadata"]}
+            print("v4 comparison", path.name, result[-4:], flush=True)
     # Test manual crop and confirm that stale OCR can no longer be exported.
     client.predict(api_name="/begin_edit")
     editor = {"background": handle_file(crops[0]), "layers": [], "composite": handle_file(crops[0])}
@@ -78,7 +90,7 @@ def main() -> None:
     assert payload["model"].endswith("gốc")
     report_name = "smoke_latest.json" if (root / "models/extended1_bundle.json").is_file() else "smoke_v2.json"
     (root / "models" / report_name).write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
-    print("PASS: upload, crop versions, confirmation gate, both models, manual crop, JSON export.")
+    print("PASS: upload, crop versions, confirmation gate, model selection, manual crop, JSON export.")
 
 
 if __name__ == "__main__":

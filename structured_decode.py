@@ -83,7 +83,11 @@ def date_candidate(model, memory, vocab, width: int = 8) -> tuple[str | None, fl
     return texts[index], math.exp(scores[index])
 
 
-def propose(model, memory, vocab, field: str, raw: str, normalized: str, distance) -> dict | None:
+def propose(model, memory, vocab, field: str, raw: str, normalized: str, distance,
+            category_policy: dict | None = None) -> dict | None:
+    if category_policy is not None and field in ("dan_toc", "ton_giao"):
+        from v5_category_decode import propose_category
+        return propose_category(model, memory, vocab, field, raw, normalized, distance, category_policy)
     if field == "ngay_sinh" and not valid_date(normalized):
         value, score = date_candidate(model, memory, vocab)
         if value and score >= .5:

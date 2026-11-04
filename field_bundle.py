@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from functools import lru_cache
 from pathlib import Path
 
@@ -19,6 +20,16 @@ def load_bundle(filename: str) -> dict:
             raise ValueError(f"Thiếu checkpoint trong bundle: {entry['weights']}")
         if not isinstance(entry.get("sha256"), str) or len(entry["sha256"]) != 64:
             raise ValueError("Bundle thiếu checksum checkpoint")
+    rules = data.get("category_policies", {})
+    if not isinstance(rules, dict) or not set(rules) <= {"dan_toc", "ton_giao"}:
+        raise ValueError("Chính sách giải mã chỉ áp dụng cho dân tộc/tôn giáo")
+    for policy in rules.values():
+        if not isinstance(policy, dict) or set(policy) != {"threshold", "odds"}:
+            raise ValueError("Chính sách danh mục phải có threshold và odds")
+        if any(type(value) not in (int, float) or not math.isfinite(value) for value in policy.values()):
+            raise ValueError("Ngưỡng giải mã phải là số hữu hạn")
+        if not .25 <= policy["threshold"] <= 1 or not 2 <= policy["odds"] <= 10:
+            raise ValueError("Ngưỡng giải mã ngoài phạm vi hỗ trợ")
     return data
 
 
@@ -29,3 +40,11 @@ def resolve_model(weights: str | None, field: str) -> tuple[str | None, str | No
     data = load_bundle(str(path))
     entry = data.get("fields", {}).get(field, data["base"])
     return str((path.parent / entry["weights"]).resolve()), entry["sha256"]
+
+
+def category_policy(weights: str | None, field: str) -> dict | None:
+    if not weights or Path(weights).suffix.lower() != ".json":
+        return None
+    data = load_bundle(str(Path(weights).resolve()))
+    policy = data.get("category_policies", {}).get(field)
+    return dict(policy) if policy is not None else None

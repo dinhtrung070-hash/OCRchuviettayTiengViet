@@ -69,11 +69,12 @@ def verify_checkpoints(models: Path, bundle: dict) -> dict[str, str]:
     return hashes
 
 
-def verify_reports(models: Path, data: Path, bundle: dict, checksum: str, previous_checksum: str) -> dict:
+def verify_reports(models: Path, data: Path, bundle: dict, checksum: str, previous_checksum: str,
+                   version: int = 4, previous_version: int = 3) -> dict:
     comparisons = {}
     for split in ("valid", "test"):
-        report = json.loads((models / f"extended1_v4_final_{split}.json").read_text(encoding="utf-8"))
-        reference = json.loads((models / f"extended1_v3_final_{split}.json").read_text(encoding="utf-8"))
+        report = json.loads((models / f"extended1_v{version}_final_{split}.json").read_text(encoding="utf-8"))
+        reference = json.loads((models / f"extended1_v{previous_version}_final_{split}.json").read_text(encoding="utf-8"))
         annotation_checksum = sha256(data / f"{split}_annotation.txt")
         if (report["split"] != split or reference["split"] != split
                 or report["weights_sha256"] != checksum
@@ -97,11 +98,11 @@ def verify_reports(models: Path, data: Path, bundle: dict, checksum: str, previo
         for field in FIELDS:
             assert_same_metrics(old["by_field"][field], recorded["by_field"][field], f"{split}/{field}")
             assert_no_regression(new["by_field"][field], old["by_field"][field], f"{split}/{field}")
-            field_comparisons[field] = {"v3": {key: old["by_field"][field][key] for key in METRICS},
-                                        "v4": {key: new["by_field"][field][key] for key in METRICS}}
+            field_comparisons[field] = {f"v{previous_version}": {key: old["by_field"][field][key] for key in METRICS},
+                                        f"v{version}": {key: new["by_field"][field][key] for key in METRICS}}
         comparisons[split] = {"annotation_sha256": annotation_checksum,
-                              "v3": {key: old[key] for key in METRICS},
-                              "v4": {key: new[key] for key in METRICS}, "by_field": field_comparisons}
+                              f"v{previous_version}": {key: old[key] for key in METRICS},
+                              f"v{version}": {key: new[key] for key in METRICS}, "by_field": field_comparisons}
     return comparisons
 
 
@@ -155,20 +156,24 @@ def atomic_json(path: Path, value: dict) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check-only", action="store_true", help="Run every gate, including live-crop replay, but do not replace the active bundle")
+    parser.add_argument("--version", type=int, default=4)
+    parser.add_argument("--previous-version", type=int, default=3)
     args = parser.parse_args()
+    if not 3 <= args.previous_version < args.version:
+        parser.error("Require 3 <= previous-version < version")
     models, data = ROOT / "models", ROOT / "prepared" / "extended1_v2"
-    candidate = models / "extended1_v4_bundle_candidate.json"
-    previous = models / "extended1_v3_previous_bundle.json"
+    candidate = models / f"extended1_v{args.version}_bundle_candidate.json"
+    previous = models / f"extended1_v{args.previous_version}_previous_bundle.json"
     raw = candidate.read_bytes()
     checksum = hashlib.sha256(raw).hexdigest()
     previous_checksum = sha256(previous)
     bundle = json.loads(raw)
     if bundle.get("form_decoder") != "greedy" or bundle.get("form_structured") is not True:
         raise ValueError("Candidate must use the evaluated greedy/structured inference configuration")
-    comparisons = verify_reports(models, data, bundle, checksum, previous_checksum)
+    comparisons = verify_reports(models, data, bundle, checksum, previous_checksum, args.version, args.previous_version)
     checkpoints = verify_checkpoints(models, bundle)
     replay = replay_candidate(candidate, bundle, checksum)
-    atomic_json(models / "v4_replay_candidate.json", replay)
+    atomic_json(models / f"v{args.version}_replay_candidate.json", replay)
     if replay["total"] != 8 or replay["structured_correct"] != 8:
         raise ValueError("Candidate failed 8/8 structured replay fields; deployment rejected")
     # Recheck after inference, before any active-bundle replacement.
@@ -182,13 +187,13 @@ def main() -> None:
                "comparisons": comparisons,
                "replay_training_regression": {key: replay[key] for key in ("total", "raw_correct", "structured_correct", "pilot_labels_sha256", "role")}}
     if args.check_only:
-        atomic_json(models / "extended1_v4_promotion_check.json", summary)
+        atomic_json(models / f"extended1_v{args.version}_promotion_check.json", summary)
     else:
         temporary = models / "extended1_bundle.json.tmp"
         temporary.write_bytes(raw)
         os.replace(temporary, models / "extended1_bundle.json")
         atomic_json(models / "extended1_bundle_evaluation.json", summary)
-        atomic_json(models / "extended1_v4_bundle_evaluation.json", summary)
+        atomic_json(models / f"extended1_v{args.version}_bundle_evaluation.json", summary)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 

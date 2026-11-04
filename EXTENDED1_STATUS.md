@@ -1,8 +1,8 @@
 # Extended 1 · kết quả thực chạy ngày 04/11/2026
 
-**Cập nhật mới nhất: bundle v4.** Fine-tune tiếp từ hai nguồn VietOCR chữ viết tay trên cùng dữ liệu nhóm, chọn checkpoint riêng cho họ tên/ngày sinh/tôn giáo và giữ v2 cho dân tộc. Valid OCR thô tăng 15 → 22/28; test cũ tăng 11 → 13/28, CER 24,7% → 13,8%. Sau giải mã trường, test tăng 15 → 19/28. Xem [FINETUNE_V4.md](FINETUNE_V4.md) cho nguồn model, từng lượt thử, các lỗi còn lại và cách tái hiện; lịch sử v3 ở [FINETUNE_V3.md](FINETUNE_V3.md).
+**Cập nhật mới nhất: bundle v5.** Đã thử thêm các hướng fine-tune nhưng không có trọng số mới vượt v4; giữ cả bốn checkpoint v4 và cải thiện decoder dân tộc/tôn giáo. OCR thô test giữ 13/28, CER 13,8%; sau giải mã tăng 19 → 21/28. Valid sau giải mã tăng 23 → 24/28. Xem [FINETUNE_V5.md](FINETUNE_V5.md) cho bằng chứng, các nhánh bị loại và giới hạn; nguồn khởi tạo/fine-tune v4 ở [FINETUNE_V4.md](FINETUNE_V4.md).
 
-Đã triển khai và tự kiểm thử luồng tải ảnh → căn/crop → xem ảnh xử lý chấm hoặc crop gốc → sửa crop tay → xác nhận crop → chọn VietOCR gốc/fine-tune → sửa nội dung → xuất JSON. **Nhận dạng tự động vẫn chưa đủ chính xác để bỏ bước người dùng kiểm tra.** Các phần dưới giữ lại hồ sơ của lượt v2 để đối chiếu; hướng dẫn model đang dùng xem tài liệu v4 ở trên.
+Đã triển khai và tự kiểm thử luồng tải ảnh → căn/crop → xem ảnh xử lý chấm hoặc crop gốc → sửa crop tay → xác nhận crop → chọn VietOCR gốc/fine-tune → sửa nội dung → xuất JSON. **Nhận dạng tự động vẫn chưa đủ chính xác để bỏ bước người dùng kiểm tra.** Các phần dưới giữ lại hồ sơ của lượt v2 để đối chiếu; hướng dẫn model đang dùng xem tài liệu v5 ở trên.
 
 ## Thay đổi ở ảnh đầu vào
 

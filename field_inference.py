@@ -87,7 +87,7 @@ def beam_tokens(model, memory, vocab, maximum: int, width: int = 4) -> list[int]
 
 
 def predict_field(predictor, image, field: str, decoder: str | None = None,
-                  structured: bool | None = None) -> dict:
+                  structured: bool | None = None, category_policy: dict | None = None) -> dict:
     config, model, vocab = predictor.config, predictor.model, predictor.vocab
     picture = process_input(image, config["dataset"]["image_height"],
                             config["dataset"]["image_min_width"], config["dataset"]["image_max_width"])
@@ -124,14 +124,18 @@ def predict_field(predictor, image, field: str, decoder: str | None = None,
     if structured:
         from structured_decode import propose
         with torch.inference_mode():
-            proposal = propose(model, memory, vocab, field, raw, value, text_distance)
+            proposal = propose(model, memory, vocab, field, raw, value, text_distance,
+                               category_policy=category_policy)
         if proposal:
             value = proposal["value"]
     warnings, suggestion = review_hints(field, value, score, tokens[-1] == vocab.eos)
     if proposal:
         warnings.append(proposal["warning"])
-    return {"raw": raw, "value": value, "model_score": round(score, 4),
+    result = {"raw": raw, "value": value, "model_score": round(score, 4),
             "score_note": "Mean token score; not a calibrated probability of correctness.",
             "warnings": warnings, "suggestion": suggestion, "ended": tokens[-1] == vocab.eos,
             "structured_proposal": proposal,
             "decoder": decoder}
+    if category_policy is not None and structured and field in ("dan_toc", "ton_giao"):
+        result["category_policy"] = dict(category_policy)
+    return result

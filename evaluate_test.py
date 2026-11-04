@@ -15,6 +15,7 @@ from ocr_review_app import BASE_DIR, get_field_predictor
 from train_extended1 import read_annotations
 from field_inference import normalize_value, predict_field
 from handwriting_preprocess import PREPROCESS_VERSION
+from field_bundle import category_policy
 
 
 def edit_distance(left: str, right: str) -> int:
@@ -45,7 +46,8 @@ def run(weights: Path | None, rows: list[tuple[Path, str]], metadata: dict[str, 
         info = metadata[image_path.relative_to(metadata["_root"]).as_posix()]
         predictor = get_field_predictor(str(weights.resolve()) if weights else None, info["field"])
         with Image.open(image_path) as image:
-            detail = predict_field(predictor, image, info["field"], decoder, structured)
+            detail = predict_field(predictor, image, info["field"], decoder, structured,
+                                   category_policy=category_policy(str(weights.resolve()) if weights else None, info["field"]))
             prediction = detail["raw"]
         results.append({"form": info["form"], "field": info["field"],
                         "ink": "blue" if info["blue_ink_detected"] == "True" else "dark",
@@ -54,6 +56,7 @@ def run(weights: Path | None, rows: list[tuple[Path, str]], metadata: dict[str, 
                         "formatted": normalize_value(info["field"], prediction),
                         "formatted_exact": normalize_value(info["field"], prediction).casefold() == normalize_value(info["field"], label).casefold(),
                         "structured_value": detail["value"], "structured_proposal": detail["structured_proposal"],
+                        "category_policy": detail.get("category_policy"),
                         "structured_exact": detail["value"].casefold() == normalize_value(info["field"], label).casefold(),
                         "model_score": detail["model_score"],
                         "model_metadata": predictor.form_metadata,
