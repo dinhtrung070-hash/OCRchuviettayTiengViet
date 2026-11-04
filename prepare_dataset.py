@@ -15,11 +15,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from handwriting_preprocess import clean_handwriting
+
 
 # Coordinates on Demo/phieu_mau.png (863 x 242). Keep the printed labels out.
 FIELDS = {
-    # The second row can rise into the name row; stop before its Dân tộc field.
-    "ho_ten": (195, 96, 470, 150),
+    "ho_ten": (185, 96, 825, 150),
     "ngay_sinh": (195, 145, 338, 188),
     "dan_toc": (415, 145, 545, 188),
     "ton_giao": (638, 145, 825, 188),
@@ -100,6 +101,8 @@ def legacy_reference(path: str) -> np.ndarray:
 
 def extract_handwriting(region: np.ndarray, blank_region: np.ndarray, layout: str) -> tuple[np.ndarray, str]:
     """Use the same crop cleaning for dataset generation and live inference."""
+    if layout == "current":
+        return clean_handwriting(region, blank_region, mode="dots")
     cleaned, blue = blue_handwriting_only(region)
     if blue:
         return cleaned, "blue"
@@ -202,6 +205,7 @@ def process_form(template: np.ndarray, source: Path, output: Path) -> list[dict[
         a, b, c, d = box
         region = aligned[b:d, a:c]
         cleaned, ink = extract_handwriting(region, scaled_template[b:d, a:c], layout)
+        write_image(form_dir / f"{field}_raw.png", region)
         crop_file = form_dir / f"{field}.png"
         write_image(crop_file, cleaned)
         cv2.rectangle(debug, (a, b), (c, d), (0, 0, 255), 2)

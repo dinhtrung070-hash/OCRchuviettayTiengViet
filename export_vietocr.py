@@ -18,6 +18,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=Path(__file__).parent / "prepared")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--reuse-split", type=Path,
+                        help="Preserve previous valid/test groups; add newly labeled groups only to train")
     parser.add_argument("--skip-unlabeled", action="store_true",
                         help="Omit crops with an empty transcription")
     parser.add_argument("--allow-provisional-form-groups", action="store_true",
@@ -58,17 +60,25 @@ def main() -> None:
         print("WARNING: provisional form groups; writer independence is unknown")
 
     writers = sorted(by_writer)
-    random.Random(args.seed).shuffle(writers)
-    count = len(writers)
-    valid_count = max(1, round(count * 0.15))
-    test_count = max(1, round(count * 0.15))
-    if valid_count + test_count >= count:
-        valid_count = test_count = 1
-    writer_splits = {
-        "valid": writers[:valid_count],
-        "test": writers[valid_count:valid_count + test_count],
-        "train": writers[valid_count + test_count:],
-    }
+    if args.reuse_split:
+        original = json.loads(args.reuse_split.read_text(encoding="utf-8"))
+        writer_splits = {key: list(original["groups"][key]) for key in ("valid", "test", "train")}
+        assigned = [person for people in writer_splits.values() for person in people]
+        if len(set(assigned)) != len(assigned) or not set(assigned) <= set(writers):
+            raise SystemExit("Reused split contains duplicate or missing groups")
+        writer_splits["train"].extend(person for person in writers if person not in assigned)
+    else:
+        random.Random(args.seed).shuffle(writers)
+        count = len(writers)
+        valid_count = max(1, round(count * 0.15))
+        test_count = max(1, round(count * 0.15))
+        if valid_count + test_count >= count:
+            valid_count = test_count = 1
+        writer_splits = {
+            "valid": writers[:valid_count],
+            "test": writers[valid_count:valid_count + test_count],
+            "train": writers[valid_count + test_count:],
+        }
     for split, people in writer_splits.items():
         lines = [f"{image}\t{label}" for person in people for image, label in by_writer[person]]
         (data_dir / f"{split}_annotation.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")

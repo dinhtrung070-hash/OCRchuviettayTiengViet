@@ -1,6 +1,6 @@
 # OCR phiếu viết tay tiếng Việt · Extended 1
 
-Mẫu có bốn trường: họ tên, ngày sinh, dân tộc, tôn giáo. Pipeline nhận biết hai bản in hiện có, căn phiếu bằng SIFT + homography, cắt bốn vùng, lọc chấm với mực xanh hoặc trừ nền mẫu với mực đen. Fine-tune VietOCR từng bước nhỏ và kết quả thực tế ghi ở [EXTENDED1_STATUS.md](EXTENDED1_STATUS.md). Kết quả OCR vẫn cần người dùng kiểm tra và sửa.
+Mẫu có bốn trường: họ tên, ngày sinh, dân tộc, tôn giáo. Pipeline nhận biết hai bản in hiện có, căn phiếu bằng SIFT + homography, cắt bốn vùng và lọc chấm bảo toàn nét viết cho cả mực xanh/đen. Fine-tune VietOCR và số liệu thực chạy ở [EXTENDED1_STATUS.md](EXTENDED1_STATUS.md). Kết quả vẫn cần người dùng kiểm tra và sửa.
 
 ## Cài trên máy mới sau khi clone
 
@@ -25,17 +25,17 @@ Trong thư mục repo, chạy:
 Mở <http://127.0.0.1:7860>. Hai phiếu `phieu_da_viet.png` và `phieudaviet1.png` có sẵn ngay trong giao diện để thử. Quy trình:
 
 1. Tải ảnh hoặc chọn một phiếu mẫu, bấm **Căn phiếu và cắt tự động**.
-2. Xem bốn ảnh crop. Nếu vùng nào sai, bấm **Sửa crop** ở trường đó, dùng công cụ **Crop** trên ảnh phiếu, bấm **Apply** trong khung ảnh, rồi bấm **Dùng crop vừa chọn**. Nếu căn tự động thất bại, sửa crop tay cả bốn trường.
+2. Xem bốn ảnh crop. Bật/tắt **Lọc dòng chấm** để so với ảnh gốc. Nếu vùng nào sai, bấm **Sửa crop** ở trường đó, dùng công cụ **Crop**, bấm **Apply**, rồi **Dùng crop vừa chọn**. Nếu căn tự động thất bại, sửa crop tay cả bốn trường.
 3. Tích **Crop đúng** cho đủ bốn trường rồi bấm **Xác nhận crop và chạy VietOCR**.
-4. Sửa trực tiếp nội dung nhận dạng nếu cần, sau đó bấm **Xem và tải JSON**. JSON giữ cả dự đoán gốc và nội dung đã xác nhận.
+4. Xem các cảnh báo, đối chiếu ảnh và sửa nội dung, sau đó bấm **Xác nhận nội dung và tải JSON**. JSON giữ OCR thô, đề xuất nhận dạng theo trường và nội dung đã sửa. Đề xuất ngày/danh mục cũng có thể sai.
 
 Demo mặc định dùng **VietOCR vgg_transformer pretrained**, chưa phải mô hình đã fine-tune. Repo không chứa file trọng số 145 MB; nếu chưa có `models/pretrained_vgg_transformer.pth`, VietOCR tải trọng số gốc từ URL trong `models/vgg_transformer.yml` ở lần OCR đầu tiên. Cần Internet cho lần tải này. Khi đã có trọng số fine-tune, chạy `ocr_review_app.py --weights đường_dẫn_đến_file.pth` để dùng trọng số mới. Toàn bộ demo chỉ phục vụ trên máy này (`127.0.0.1`), chạy bằng CPU nên lần OCR đầu có thể chậm.
 
-Trên máy đã train Extended 1, chạy `.\start_extended1.ps1` rồi mở <http://127.0.0.1:7861>. Giao diện cho chọn model gốc hoặc checkpoint fine-tune nhẹ `models/incremental_component_head_step1.pth` trên cùng crop; mặc định dùng model gốc. File trọng số chỉ có ở máy đã train; nhóm cần nhận riêng nếu muốn so sánh trên máy khác.
+Trên máy đã train Extended 1, chạy `.\start_extended1.ps1` rồi mở <http://127.0.0.1:7861>. Mặc định dùng **Fine-tune Extended 1** (`models/extended1_selected.pth`), có thể chọn model gốc để so cùng crop. File trọng số chỉ có ở máy đã train; nhóm cần nhận riêng nếu muốn chạy trên máy khác. Nếu cổng đã có demo đang chạy thì mở trang, không khởi động thêm.
 
 Hai phiếu mẫu cũ vẫn có thể dùng để thử giao diện. Bộ 50 phiếu có cả bút xanh và bút đen. Kết quả so sánh model gốc và bản fine-tune trên tập test được ghi trong [EXTENDED1_STATUS.md](EXTENDED1_STATUS.md).
 
-**Extended 1:** Đã train một checkpoint rất nhẹ từ model gốc. Bản này cải thiện CER trên valid nhưng chưa cải thiện test, nên demo mặc định dùng model gốc. Xem [EXTENDED1_STATUS.md](EXTENDED1_STATUS.md) để biết số liệu và giới hạn đánh giá.
+**Kết quả mới:** trên cùng 28 crop test, model gốc đúng toàn chuỗi 2/28 và bản fine-tune đúng 10/28; CER 45,6% → 25,5%. Khi bổ sung định dạng/giải mã theo trường, kết quả fine-tune là 14/28. Đây là đánh giá khảo sát trên tập test đã được xem ở các lần thử trước; chưa có ID người viết thật. Hướng dẫn chuẩn bị dữ liệu, train lại và xem từng dự đoán nằm ở [EXTENDED1_STATUS.md](EXTENDED1_STATUS.md).
 
 ## Chạy với hai ảnh mẫu
 
@@ -67,11 +67,19 @@ Kết quả nằm trong `prepared/`: mỗi phiếu có `aligned.png`, `debug_fie
 
 ## Giới hạn hiện tại
 
-- ZIP có 50 phiếu nhưng không có đáp án hay mã người viết. Đã gán nhãn lượt đầu cho 45 phiếu; cần nhóm kiểm tra lại. Chia train/valid/test hiện theo **phiếu**, chưa đảm bảo người viết độc lập.
-- Trên 7 phiếu test với pipeline mới, model gốc và bản fine-tune nhẹ đều đúng toàn chuỗi 1/28 trường. CER của bản fine-tune còn hơi xấu hơn. Chi tiết ở [EXTENDED1_STATUS.md](EXTENDED1_STATUS.md).
+- ZIP có 50 phiếu nhưng không có đáp án hay mã người viết. Đã đọc 193/200 trường (45 phiếu đủ, năm phiếu gán một phần); cần nhóm kiểm nhãn lại. Chia train/valid/test theo **phiếu**, chưa đảm bảo người viết độc lập.
+- Họ tên và chữ số ngày sinh còn sai. Không coi định dạng hợp lệ hoặc điểm model cao là bằng chứng nội dung đã đúng.
 - Căn phiếu có thể thất bại nếu ảnh mờ, mất tiêu đề/nhãn in, hoặc mẫu in khác. Trường hợp này được báo `SKIP`; không đưa ảnh lỗi vào tập train.
 - Tọa độ `FIELDS` và `LEGACY_FIELDS` trong `prepare_dataset.py` chỉ dành cho **hai bản in hiện có**. Nếu đổi biểu mẫu phải hiệu chỉnh lại.
 
 Tài liệu dự án VietOCR mô tả [định dạng nhãn train/test](https://github.com/pbcquoc/vietocr#c%C3%A1ch-t%E1%BA%A1o-file-traintest).
 
 Baseline PaddleOCR là thử nghiệm riêng trong thư mục `DemoPaddleOCR` của máy phát triển; mã đó không nằm trong repo này.
+
+## Kiểm thử
+
+```powershell
+& '.\.venv\Scripts\python.exe' -m unittest test_extended1 -v
+# Khi demo cổng 7861 đang chạy:
+& '.\.venv\Scripts\python.exe' '.\smoke_demo.py'
+```

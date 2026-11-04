@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import hashlib
 import os
 import re
 import tempfile
@@ -23,6 +24,8 @@ import gradio as gr
 import numpy as np
 from PIL import Image
 
+from field_inference import normalize_value, predict_field
+from handwriting_preprocess import PREPROCESS_VERSION, clean_handwriting
 from prepare_dataset import (FIELDS, LEGACY_FIELDS, SCALE, detect_layout,
                              extract_handwriting, blue_handwriting_only, read_image)
 
@@ -58,6 +61,11 @@ def get_model_config(weights: str | None):
 
     config = Cfg.load_config_from_file(MODEL_CONFIG)
     config["device"] = "cpu"
+    # The full VietOCR state dict includes all CNN weights; ImageNet weights
+    # would only trigger an unnecessary second download on a fresh machine.
+    config["cnn"]["pretrained"] = False
+    config["form_structured"] = True
+    config["form_decoder"] = "greedy"
     if weights:
         path = Path(weights).expanduser().resolve()
         if not path.is_file():
@@ -73,9 +81,16 @@ def get_model_config(weights: str | None):
 
 @lru_cache(maxsize=2)
 def get_predictor(weights: str | None):
+    import torch
     from vietocr.tool.predictor import Predictor
 
-    return Predictor(get_model_config(weights))
+    torch.set_num_threads(4)
+    config = get_model_config(weights)
+    predictor = Predictor(config)
+    source = Path(config["weights"])
+    predictor.form_metadata = {"weights": source.name if source.is_file() else config["weights"],
+                               "sha256": hashlib.sha256(source.read_bytes()).hexdigest() if source.is_file() else None}
+    return predictor
 
 
 def prepare_form(image_path: str) -> dict:
@@ -84,6 +99,7 @@ def prepare_form(image_path: str) -> dict:
     photo = read_image(Path(image_path))
     template = read_image(TEMPLATE)
     crops: dict[str, Image.Image | None] = {}
+    raw_crops: dict[str, Image.Image | None] = {}
     methods: dict[str, str] = {}
     status = ""
 
@@ -105,23 +121,27 @@ def prepare_form(image_path: str) -> dict:
             a, b, c, d = (v * SCALE for v in (x1, y1, x2, y2))
             region = aligned[b:d, a:c]
             cleaned, ink = extract_handwriting(region, scaled_template[b:d, a:c], layout)
+            raw_crops[field] = bgr_to_pil(region)
             crops[field] = bgr_to_pil(cleaned)
             methods[field] = (
-                "tự động · tách mực xanh" if ink == "blue" else
-                "tự động · trừ nền mẫu" if ink == "dark" else "tự động · ảnh gốc"
+                "tự động · lọc chấm, giữ nét chữ" if layout == "current" else
+                "tự động · tách mực xanh" if ink == "blue" else "tự động · ảnh gốc"
             )
             cv2.rectangle(overlay, (a, b), (c, d), (0, 35, 230), 3)
             cv2.putText(
                 overlay, field, (a + 6, max(28, b - 8)), cv2.FONT_HERSHEY_SIMPLEX,
                 0.8, (0, 35, 230), 2, cv2.LINE_AA,
             )
-        status = f"Đã căn phiếu ({inliers} điểm khớp, bố cục {layout}). Xem kỹ 4 ảnh crop rồi xác nhận từng trường."
+        layout_name = "mẫu mới" if layout == "current" else "mẫu cũ"
+        status = f"Đã căn phiếu theo {layout_name}. Xem kỹ 4 ảnh crop rồi xác nhận từng trường."
     except (ValueError, np.linalg.LinAlgError) as exc:
         # The user can still crop each field manually from the uploaded image.
         aligned = photo
+        layout = "unknown"
         overlay = photo.copy()
         for field in FIELD_ORDER:
             crops[field] = None
+            raw_crops[field] = None
             methods[field] = "chưa có crop"
         status = f"Căn phiếu tự động chưa thành công: {exc}. Hãy sửa crop tay cho từng trường."
 
@@ -130,8 +150,14 @@ def prepare_form(image_path: str) -> dict:
         "aligned": bgr_to_pil(aligned),
         "overlay": bgr_to_pil(overlay),
         "crops": crops,
+        "raw_crops": raw_crops,
+        "clean_crops": dict(crops),
         "methods": methods,
+        "clean_methods": dict(methods),
+        "layout": layout,
+        "preprocess_version": PREPROCESS_VERSION,
         "predictions": {},
+        "prediction_details": {},
         "model_name": "",
         "status": status,
     }
@@ -151,18 +177,46 @@ def manual_crop(editor_value: dict | None, prepared: dict, field: str) -> dict:
         raise ValueError("Vùng crop quá nhỏ; hãy chọn trọn dòng chữ.")
     if selected.width >= full.width * 0.95 and selected.height >= full.height * 0.95:
         raise ValueError("Ảnh vẫn gần bằng toàn phiếu. Hãy kéo khung Crop quanh đúng trường.")
-    cleaned, has_blue = blue_handwriting_only(pil_to_bgr(selected))
+    if prepared.get("layout") == "legacy":
+        cleaned, _ = blue_handwriting_only(pil_to_bgr(selected))
+    else:
+        cleaned, _ = clean_handwriting(pil_to_bgr(selected), mode="dots")
     updated = dict(prepared)
     updated["crops"] = dict(prepared["crops"])
     updated["methods"] = dict(prepared["methods"])
+    updated["raw_crops"] = dict(prepared["raw_crops"])
+    updated["clean_crops"] = dict(prepared["clean_crops"])
+    updated["clean_methods"] = dict(prepared["clean_methods"])
     updated["predictions"] = dict(prepared["predictions"])
+    updated["prediction_details"] = dict(prepared.get("prediction_details", {}))
+    updated["raw_crops"][field] = selected
     updated["crops"][field] = bgr_to_pil(cleaned)
-    updated["methods"][field] = "crop tay · tách mực xanh" if has_blue else "crop tay · ảnh gốc"
+    updated["clean_crops"][field] = bgr_to_pil(cleaned)
+    updated["methods"][field] = "crop tay · lọc dòng chấm"
+    updated["clean_methods"][field] = updated["methods"][field]
     updated["predictions"].pop(field, None)
+    updated["prediction_details"].pop(field, None)
+    return updated
+
+
+def select_crop_version(prepared: dict, field: str, cleaned: bool) -> dict:
+    if not prepared or prepared["raw_crops"].get(field) is None:
+        raise ValueError("Hãy cắt phiếu trước khi chọn ảnh.")
+    updated = dict(prepared)
+    for key in ("crops", "methods", "predictions", "prediction_details"):
+        updated[key] = dict(prepared.get(key, {}))
+    updated["crops"][field] = prepared["clean_crops" if cleaned else "raw_crops"][field]
+    updated["methods"][field] = prepared["clean_methods"][field] if cleaned else "crop · ảnh gốc, giữ dòng chấm"
+    updated["predictions"].pop(field, None)
+    updated["prediction_details"].pop(field, None)
     return updated
 
 
 def recognize(prepared: dict, weights: str | None) -> dict[str, str]:
+    return {field: item["raw"] for field, item in recognize_detailed(prepared, weights).items()}
+
+
+def recognize_detailed(prepared: dict, weights: str | None) -> dict[str, dict]:
     if not prepared:
         raise ValueError("Hãy tải phiếu và kiểm tra crop trước.")
     for field in FIELD_ORDER:
@@ -170,7 +224,7 @@ def recognize(prepared: dict, weights: str | None) -> dict[str, str]:
             raise ValueError(f"Chưa có crop cho trường {FIELD_LABELS[field]}.")
     predictor = get_predictor(weights)
     return {
-        field: " ".join(predictor.predict(prepared["crops"][field]).split())
+        field: predict_field(predictor, prepared["crops"][field], field)
         for field in FIELD_ORDER
     }
 
@@ -183,7 +237,9 @@ def validate_field(field: str, value: str) -> tuple[bool, str]:
         if len(parts) != 3 or not all(part.isdigit() for part in parts) or len(parts[2]) != 4:
             return False, "Ngày sinh cần có dạng ngày/tháng/năm"
         try:
-            datetime.date(int(parts[2]), int(parts[1]), int(parts[0]))
+            date = datetime.date(int(parts[2]), int(parts[1]), int(parts[0]))
+            if date > datetime.date.today():
+                return False, "Ngày sinh nằm trong tương lai"
         except ValueError:
             return False, "Ngày sinh không hợp lệ"
         return True, ""
@@ -199,26 +255,34 @@ def result_payload(prepared: dict, edited: dict[str, str], weights: str | None) 
         raise ValueError("Hãy chạy VietOCR trên bốn crop đã xác nhận trước.")
     fields = {}
     for field in FIELD_ORDER:
-        value = " ".join((edited.get(field) or "").split())
+        value = normalize_value(field, edited.get(field) or "")
         valid, message = validate_field(field, value)
         fields[field] = {
             "ocr_raw": prepared["predictions"][field],
+            "formatted": normalize_value(field, prepared["predictions"][field]),
+            "suggested_value": prepared.get("prediction_details", {}).get(field, {}).get("value", normalize_value(field, prepared["predictions"][field])),
             "confirmed": value,
             "crop_method": prepared["methods"][field],
             "valid": valid,
             "validation_message": message,
+            "recognition": prepared.get("prediction_details", {}).get(field, {}),
+            "needs_review": not valid or bool(prepared.get("prediction_details", {}).get(field, {}).get("warnings")),
         }
     return {
         "form": prepared["form_name"],
         "model": prepared.get("model_name") or ("VietOCR vgg_transformer · fine-tuned" if weights else "VietOCR vgg_transformer · gốc"),
+        "model_metadata": prepared.get("model_metadata", {}),
         "all_fields_valid": all(item["valid"] for item in fields.values()),
+        "validation_note": "Basic format checks only; validity does not guarantee correct transcription.",
+        "preprocess_version": prepared.get("preprocess_version", "unknown"),
         "fields": fields,
     }
 
 
-def build_app(weights: str | None = None, compare_weights: str | None = None) -> gr.Blocks:
+def build_app(weights: str | None = None, compare_weights: str | None = None,
+              default_model: str = "baseline") -> gr.Blocks:
     model_note = (
-        f"Có thể so VietOCR gốc với bản fine-tune nhẹ `{Path(compare_weights).name}`; mặc định dùng bản gốc."
+        "Có thể chọn VietOCR gốc hoặc bản fine-tune Extended 1 để so trên cùng ảnh crop."
         if compare_weights else
         f"Đang dùng trọng số fine-tune: `{Path(weights).name}`."
         if weights else "Đang dùng VietOCR gốc (chưa fine-tune)."
@@ -250,6 +314,7 @@ def build_app(weights: str | None = None, compare_weights: str | None = None) ->
         gr.Markdown("## Kiểm tra từng vùng\nĐánh dấu **Crop đúng** cho cả bốn trường trước khi OCR. Nếu sai, bấm **Sửa crop** ở đúng trường đó.")
 
         crop_images = {}
+        clean_switches = {}
         confirms = {}
         edit_buttons = {}
         for pair in (("ho_ten", "ngay_sinh"), ("dan_toc", "ton_giao")):
@@ -257,6 +322,8 @@ def build_app(weights: str | None = None, compare_weights: str | None = None) ->
                 for field in pair:
                     with gr.Column():
                         crop_images[field] = gr.Image(label=FIELD_LABELS[field], interactive=False, height=170)
+                        clean_switches[field] = gr.Checkbox(label="Lọc dòng chấm", value=True,
+                                                            info="Tắt để so với crop gốc nếu thấy mất nét.")
                         with gr.Row():
                             confirms[field] = gr.Checkbox(label="Crop đúng", value=False)
                             edit_buttons[field] = gr.Button("Sửa crop", size="sm")
@@ -270,8 +337,8 @@ def build_app(weights: str | None = None, compare_weights: str | None = None) ->
         apply_button = gr.Button("Dùng crop vừa chọn", visible=False)
 
         model_choice = gr.Radio(
-            choices=[("VietOCR gốc", "baseline"), ("Fine-tune bước 1", "fine_tuned")],
-            value="baseline", label="Model dùng cho lượt OCR này", visible=bool(compare_weights),
+            choices=[("VietOCR gốc", "baseline"), ("Fine-tune Extended 1", "fine_tuned")],
+            value=default_model, label="Model dùng cho lượt OCR này", visible=bool(compare_weights),
         )
         ocr_button = gr.Button("2. Xác nhận crop và chạy VietOCR", variant="primary")
         gr.Markdown("## Kết quả nhận dạng\nNếu chữ sai, sửa trực tiếp trong ô. Muốn đổi vùng ảnh, bấm **Sửa crop** rồi chạy OCR lại.")
@@ -280,7 +347,8 @@ def build_app(weights: str | None = None, compare_weights: str | None = None) ->
             with gr.Row():
                 for field in pair:
                     text_boxes[field] = gr.Textbox(label=FIELD_LABELS[field], interactive=True)
-        export_button = gr.Button("3. Xem và tải JSON")
+        recognition_note = gr.Markdown("")
+        export_button = gr.Button("3. Xác nhận nội dung và tải JSON")
         json_view = gr.JSON(label="Kết quả cuối cùng")
         json_file = gr.File(label="Tải file JSON", interactive=False)
 
@@ -299,20 +367,38 @@ def build_app(weights: str | None = None, compare_weights: str | None = None) ->
                 apply_button: gr.update(visible=False),
                 json_view: None,
                 json_file: None,
+                recognition_note: "",
             }
             for field in FIELD_ORDER:
                 result[crop_images[field]] = state["crops"][field]
                 result[confirms[field]] = False
                 result[text_boxes[field]] = ""
+                result[clean_switches[field]] = True
             return result
 
         prepare_button.click(
             on_prepare, inputs=upload,
             outputs=[prepared_state, active_field, overlay, status, editor, edit_note, apply_button,
-                     json_view, json_file, *crop_images.values(), *confirms.values(), *text_boxes.values()],
+                     json_view, json_file, recognition_note, *crop_images.values(), *confirms.values(), *text_boxes.values(), *clean_switches.values()],
         )
 
         for field in FIELD_ORDER:
+            def on_clean_switch(state, enabled, selected=field):
+                try:
+                    updated = select_crop_version(state, selected, enabled)
+                except ValueError as exc:
+                    raise gr.Error(str(exc)) from exc
+                return {prepared_state: updated, crop_images[selected]: updated["crops"][selected],
+                        confirms[selected]: False, text_boxes[selected]: "", json_view: None,
+                        json_file: None, recognition_note: "",
+                        status: f"Đã đổi ảnh {FIELD_LABELS[selected]}. Xem lại crop và xác nhận trước khi OCR."}
+
+            clean_switches[field].input(
+                on_clean_switch, inputs=[prepared_state, clean_switches[field]],
+                outputs=[prepared_state, crop_images[field], confirms[field], text_boxes[field],
+                         json_view, json_file, recognition_note, status],
+            )
+
             def begin_edit(state, selected=field):
                 if not state:
                     raise gr.Error("Hãy cắt tự động hoặc tải phiếu trước.")
@@ -344,6 +430,8 @@ def build_app(weights: str | None = None, compare_weights: str | None = None) ->
                 json_view: None,
                 json_file: None,
                 text_boxes[selected]: "",
+                clean_switches[selected]: True,
+                recognition_note: "",
             }
             for field in FIELD_ORDER:
                 result[crop_images[field]] = updated["crops"][field]
@@ -354,7 +442,7 @@ def build_app(weights: str | None = None, compare_weights: str | None = None) ->
             on_apply,
             inputs=[editor, prepared_state, active_field, *confirms.values()],
             outputs=[prepared_state, status, editor, edit_note, apply_button, json_view, json_file,
-                     *crop_images.values(), *confirms.values(), *text_boxes.values()],
+                     *crop_images.values(), *confirms.values(), *text_boxes.values(), *clean_switches.values(), recognition_note],
         )
 
         def on_ocr(state, selected_model, *confirmation_values):
@@ -362,28 +450,41 @@ def build_app(weights: str | None = None, compare_weights: str | None = None) ->
                 raise gr.Error("Hãy xác nhận Crop đúng cho cả bốn trường trước khi OCR.")
             selected_weights = compare_weights if compare_weights and selected_model == "fine_tuned" else weights
             try:
-                predictions = recognize(state, selected_weights)
+                details = recognize_detailed(state, selected_weights)
+                predictions = {field: item["raw"] for field, item in details.items()}
             except ValueError as exc:
                 raise gr.Error(str(exc)) from exc
             except Exception as exc:
                 raise gr.Error(f"Không chạy được VietOCR: {exc}") from exc
             updated = dict(state)
             updated["predictions"] = predictions
-            updated["model_name"] = ("VietOCR vgg_transformer · fine-tune bước 1" if selected_weights
+            updated["prediction_details"] = details
+            updated["model_metadata"] = get_predictor(selected_weights).form_metadata
+            updated["model_name"] = (f"VietOCR vgg_transformer · {Path(selected_weights).name}" if selected_weights
                                      else "VietOCR vgg_transformer · gốc")
+            notes = []
+            for field, item in details.items():
+                valid, message = validate_field(field, item["value"])
+                warnings = item["warnings"] + ([message] if not valid else [])
+                if warnings:
+                    note = f"**{FIELD_LABELS[field]}**: " + "; ".join(warnings)
+                    if item["suggestion"]:
+                        note += f". Gợi ý để đối chiếu ảnh: **{item['suggestion']}**."
+                    notes.append(note)
             result = {
                 prepared_state: updated,
                 status: f"Đã chạy {updated['model_name']}. Kiểm tra và sửa chữ trước khi xuất JSON.",
                 json_view: None,
                 json_file: None,
+                recognition_note: "\n\n".join(notes) or "Hãy đối chiếu cả bốn kết quả với ảnh trước khi xuất JSON.",
             }
             for field in FIELD_ORDER:
-                result[text_boxes[field]] = predictions[field]
+                result[text_boxes[field]] = details[field]["value"]
             return result
 
         ocr_button.click(
             on_ocr, inputs=[prepared_state, model_choice, *confirms.values()],
-            outputs=[prepared_state, status, json_view, json_file, *text_boxes.values()],
+            outputs=[prepared_state, status, json_view, json_file, recognition_note, *text_boxes.values()],
         )
 
         def on_export(state, *texts):
@@ -409,6 +510,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weights", help="Path to fine-tuned VietOCR weights; omit for pretrained baseline")
     parser.add_argument("--compare-weights", help="Optional fine-tuned weights selectable beside the original model")
+    parser.add_argument("--default-model", choices=["baseline", "fine_tuned"], default="baseline")
     parser.add_argument("--port", type=int, default=7860)
     args = parser.parse_args()
     weights = os.path.abspath(args.weights) if args.weights else None
@@ -417,7 +519,7 @@ def main() -> None:
         parser.error(f"Không tìm thấy file trọng số: {weights}")
     if compare_weights and not Path(compare_weights).is_file():
         parser.error(f"Không tìm thấy file trọng số: {compare_weights}")
-    app = build_app(weights, compare_weights)
+    app = build_app(weights, compare_weights, args.default_model)
     app.launch(server_name="127.0.0.1", server_port=args.port, share=False, show_error=True)
 
 

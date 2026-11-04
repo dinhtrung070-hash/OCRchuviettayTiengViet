@@ -1,0 +1,6 @@
+{
+  "ethnicity_source": "https://investvietnam.gov.vn/vi/co-ban-ve-viet-nam.nd/cac-dan-toc-viet-nam.html",
+  "note": "Recognition vocabulary, including common aliases. Religion entries are examples supported by this demo, not a complete or official classification. Out-of-vocabulary text remains editable; no name dictionary is used.",
+  "dan_toc": ["Kinh", "Tày", "Thái", "Mường", "Hoa", "Khmer", "Nùng", "Mông", "Dao", "Gia Rai", "Ê Đê", "Ba Na", "Sán Chay", "Chăm", "Xơ Đăng", "Sán Dìu", "Hrê", "Cơ Ho", "Ra Glai", "M'Nông", "Thổ", "Xtiêng", "Khơ Mú", "Bru-Vân Kiều", "Giáy", "Cơ Tu", "Gié-Triêng", "Tà Ôi", "Mạ", "Co", "Chơ Ro", "Hà Nhì", "Xinh Mun", "Chu Ru", "Lào", "La Chí", "Phù Lá", "La Hủ", "Kháng", "Lự", "Pà Thẻn", "Lô Lô", "Chứt", "Mảng", "Cờ Lao", "Bố Y", "La Ha", "Cống", "Ngái", "Si La", "Pu Péo", "Brâu", "Rơ Măm", "Ơ Đu", "Hán", "Sán Chỉ", "Ê đê", "HMông"],
+  "ton_giao": ["Không", "Không có", "Phật giáo", "Công giáo", "Tin Lành", "Hồi giáo", "Ki tô giáo", "Ấn Độ giáo", "Do Thái giáo", "Cao Đài", "Hòa Hảo", "Bà La Môn", "Bửu Sơn Kỳ Hương", "Tịnh độ cư sĩ", "Tứ Ân Hiếu Nghĩa"]
+}

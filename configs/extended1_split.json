@@ -1,0 +1,63 @@
+{
+  "seed": 42,
+  "group_type": "provisional_form",
+  "skipped_unlabeled_crops": 7,
+  "groups": {
+    "valid": [
+      "form_020",
+      "form_023",
+      "form_039",
+      "form_011",
+      "form_025",
+      "form_010",
+      "form_030"
+    ],
+    "test": [
+      "form_034",
+      "form_013",
+      "form_004",
+      "form_036",
+      "form_005",
+      "form_050",
+      "form_026"
+    ],
+    "train": [
+      "form_012",
+      "form_033",
+      "form_028",
+      "form_041",
+      "form_045",
+      "form_031",
+      "form_015",
+      "form_027",
+      "form_022",
+      "form_024",
+      "form_032",
+      "form_047",
+      "form_001",
+      "form_021",
+      "form_018",
+      "form_049",
+      "form_040",
+      "form_038",
+      "form_048",
+      "form_003",
+      "form_029",
+      "form_006",
+      "form_037",
+      "form_007",
+      "form_009",
+      "form_016",
+      "form_017",
+      "form_019",
+      "form_002",
+      "form_008",
+      "form_046",
+      "form_014",
+      "form_035",
+      "form_042",
+      "form_043",
+      "form_044"
+    ]
+  }
+}

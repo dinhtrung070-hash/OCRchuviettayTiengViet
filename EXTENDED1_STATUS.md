@@ -1,62 +1,83 @@
-# Extended 1 · làm lại từ VietOCR gốc, fine-tune từng bước nhỏ
+# Extended 1 · kết quả thực chạy ngày 04/11/2026
 
-## Tình trạng thực tế
+Đã triển khai và tự kiểm thử luồng tải ảnh → căn/crop → xem ảnh xử lý chấm hoặc crop gốc → sửa crop tay → xác nhận crop → chọn VietOCR gốc/fine-tune → sửa nội dung → xuất JSON. Demo mặc định dùng checkpoint fine-tune v2. **Kết quả đã cải thiện, nhưng nhận dạng tự động vẫn chưa đủ chính xác để bỏ bước người dùng kiểm tra.**
 
-Demo ở `http://127.0.0.1:7861/` cho tải phiếu, tự căn và crop, sửa crop tay, xác nhận từng trường, OCR, sửa chữ và xuất JSON. Giao diện hiện cho chọn **VietOCR gốc** hoặc **fine-tune bước 1** trên cùng crop; mặc định dùng model gốc vì bản fine-tune chưa thắng trên tập test. Không nên trình bày đây là hệ thống nhận dạng chính xác cao.
+## Thay đổi ở ảnh đầu vào
 
-## Vì sao bản trước bị lệch
+Giữ riêng tọa độ cho hai bản in hiện có. Nới vùng họ tên của bộ 50 phiếu để không cắt mất tên dài; loại các mảnh tiêu đề hoặc hàng kế tiếp bị lọt ở sát mép crop. Với bộ mới, cả mực xanh và đen đi qua cùng nhánh chuẩn hóa nền và lọc chấm bảo toàn nét chữ.
 
-Hai phiếu mẫu ban đầu là một bản in có tiêu đề chữ hoa; 50 phiếu mới dùng `phieu_mau.png` với tiêu đề chữ thường và vị trí chữ hơi khác. Bản trước dùng chung khung cắt chặt cho cả hai. Bước loại chấm còn lấy nét in từ mẫu rồi xóa cả vùng quanh nét in, làm mất một phần nét viết. Trên hai phiếu mẫu cũ, VietOCR gốc với crop cũ đúng **7/8** trường; cùng model với crop sau đó chỉ đúng **1/8**. Đây là lỗi đầu vào, không phải bằng chứng fine-tune tự nó làm model quên hết.
+Nhánh mới chỉ xóa các chấm nhỏ tách rời nằm ngoài cụm chữ. Chấm dính vào nét viết, dấu tiếng Việt và chấm bên trong từ được giữ lại để recognizer học; không còn xóa cả dải ngang theo mẫu in. Vì vậy ảnh có thể vẫn còn vài chấm, nhưng tránh cắt đứt nét. Trong giao diện, checkbox **Lọc dòng chấm** cho từng trường giúp so ngay với crop gốc; thay ảnh sẽ hủy kết quả OCR cũ của trường đó và yêu cầu xác nhận lại crop.
 
-Đã sửa: nhận biết hai bản in bằng số điểm SIFT khớp với ảnh tham chiếu, dùng khung cắt riêng; với mực xanh giữ các thành phần nét viết đủ lớn rồi bỏ chấm nằm xa cụm chữ, **không xóa theo mẫu in**. Mực đen vẫn dùng nhánh trừ nền mẫu hiện có; phần này còn làm mất nét khi chữ đè lên dòng chấm. Nút crop tay và sửa nội dung vẫn cần thiết.
+## Dữ liệu và nhãn
 
-## Dữ liệu
+- ZIP có 50 ảnh, tạo 200 crop. Nhãn được đọc trực tiếp từ ảnh, không có đáp án hay ID người viết do nhóm cung cấp.
+- Đã rà lại 45 phiếu đủ bốn trường. Với năm phiếu từng bỏ ngoài, chỉ bổ sung 13 trường đọc rõ; bảy trường còn mơ hồ hoặc ngày không rõ/hợp lệ vẫn để trống. Tổng cộng **193 trường có nhãn**. Đây là một lượt kiểm tra bằng mắt của trợ lý, chưa thay thế việc hai thành viên nhóm đối chiếu lại.
+- Giữ nguyên bảy nhóm valid và bảy nhóm test cũ; năm phiếu gán nhãn một phần chỉ thêm vào train. Train: **36 phiếu / 137 crop**; valid: **7 / 28**; test: **7 / 28**.
+- Hai phiếu demo cũ / tám crop được thêm làm dữ liệu replay trong train để giữ khả năng đọc mẫu cũ. Số đúng 8/8 trên hai phiếu này là kiểm tra hồi quy trên dữ liệu train, không phải kết quả tổng quát hóa.
+- Train có ba phiên bản ảnh mỗi crop: ảnh sạch cùng các biến thể nhẹ về độ nghiêng, độ rộng, tương phản, nhòe và chấm giả. Các biến thể không sang valid/test và không được tính thành người viết hay phiếu mới.
 
-`Dataset.zip` có 50 ảnh, không có đáp án hay mã người viết. Đã căn được 50/50 ảnh; có 200 crop. Nhãn đọc trực tiếp từ ảnh cho 45 phiếu / 180 crop (23 phiếu xanh, 22 phiếu đen); năm phiếu 14, 35, 42, 43, 44 còn mơ hồ nên để ngoài train và đánh giá. Nhãn là lượt đầu, cần người trong nhóm kiểm tra lại trên ảnh gốc.
+Nhãn cục bộ: `forms/dataset_20261102/ground_truth_audited_v2.csv`; ghi chú kiểm nhãn: `label_audit_v2.json`. Crop/annotation mới: `prepared/extended1_v2/`. Cấu hình chia nhóm có thể tái sử dụng ở `configs/extended1_split.json`.
 
-Chia theo **mã phiếu tạm**: train 31 phiếu / 124 crop, valid 7 / 28, test 7 / 28. Chưa có ID người viết thật nên không thể tuyên bố kết quả trên người viết mới. Tập test cũng đã được xem trong lần thử trước, nên mọi con số dưới đây mang tính khảo sát; cần ảnh mới chưa dùng để chỉnh pipeline cho báo cáo cuối.
+**Giới hạn đánh giá:** `form_001`… là ID phiếu tạm, không phải người viết. Chưa loại trừ một người xuất hiện ở nhiều tập. Tập test đã được khảo sát trong các lần thử cũ và toàn bộ bộ ảnh đã được xem khi chỉnh preprocessing. Các số dưới đây là đánh giá khảo sát trên dữ liệu hiện có, chưa phải kiểm định độc lập trên người viết mới.
 
-Ảnh, nhãn, crop và trọng số nằm cục bộ, bị `.gitignore` loại khỏi GitHub. Dữ liệu mới đã chuẩn bị ở `prepared/dataset_20261103_component/`; nhãn gốc ở `forms/dataset_20261102/ground_truth_first_pass.csv`.
+## Fine-tune và lựa chọn checkpoint
 
-## Cách fine-tune mới
+Giữ kiến trúc VietOCR `vgg_transformer`, backbone `vgg19_bn`, thư viện VietOCR `0.3.13`; khởi đầu từ `pretrained_vgg_transformer.pth`. CNN được khóa trong lượt được chọn; transformer được fine-tune với label smoothing, augmentation chỉ trên train, gradient clipping và early stopping. Cache đặc trưng CNN giúp train được trên CPU.
 
-Mỗi phép thử được so với model gốc trên cùng crop. Bước 1 bắt đầu từ `models/pretrained_vgg_transformer.pth`, khóa CNN và toàn bộ transformer trừ lớp dự đoán ký tự `transformer.fc`, learning rate `1e-5`, tối đa ba epoch. Chọn checkpoint ở epoch 2 bằng valid; epoch 3 bị loại vì CER tăng. Bước 2 thử mở transformer từ checkpoint bước 1 với learning rate `1e-6`, hai epoch; cả hai bị loại vì CER valid xấu hơn. Quy tắc lưu checkpoint: số trường đúng và CER trên valid phải cải thiện, đồng thời hai phiếu mẫu cũ không được giảm số trường đúng. **Không dùng kết quả test để chọn epoch.**
-
-| Model / checkpoint | Valid đúng toàn trường | Valid CER | Hai mẫu cũ |
+| Giai đoạn | Kết quả valid tốt nhất | CER valid | Hai mẫu replay |
 | --- | ---: | ---: | ---: |
-| VietOCR gốc, crop đã sửa | 4/28 | 36,8% | 7/8 |
-| Fine-tune bước 1, epoch 2 | 4/28 | 36,0% | 7/8 |
-| Thử transformer bước 2, epoch 2 (loại) | 4/28 | 39,5% | 7/8 |
+| Model gốc, cùng preprocessing mới | 3/28 | 41,2% | 7/8 |
+| Lượt đầu, LR `3e-5`, dừng ở epoch 5 theo yêu cầu pause | 10/28 | 21,1% | 8/8 |
+| Tiếp tục từ checkpoint trên, LR `2e-5`, chọn epoch 8 của lượt tiếp | **13/28** | **15,4%** | **8/8** |
 
-Đánh giá khảo sát trên 7 phiếu test với **cùng crop mới**:
+Lượt tiếp chạy đến epoch 15 rồi dừng sớm vì valid không tốt hơn. Khi tiếp tục từ file trọng số, optimizer được khởi tạo lại; đây không phải khôi phục nguyên trạng optimizer trước pause. Hai phép thử mở khối cuối CNN và một phép thử beam search không tốt hơn trên valid nên bị loại. Checkpoint được chọn trước khi xem kết quả test của lượt này.
 
-| Model | Test đúng toàn trường | Test CER |
-| --- | ---: | ---: |
-| VietOCR gốc | 1/28 | 51,5% |
-| Fine-tune bước 1 | 1/28 | 51,9% |
+File nguồn được chọn: `models/extended1_v2_continued.pth`. File demo: `models/extended1_selected.pth`, khoảng 145 MiB. SHA-256: `3758af1dda76597061b8b4bb8fdf49b97a632a293875744e4c4377b642ddd250`. Metadata và số liệu đối chiếu ở `models/extended1_selected.json`.
 
-Vì fine-tune bước 1 hơi xấu hơn trên test, demo để model gốc làm mặc định và cho chọn bản fine-tune để đối chiếu. Mức cải thiện valid chỉ khoảng 0,9 điểm phần trăm CER; chưa có bằng chứng bản fine-tune tổng quát hóa tốt hơn. Trên phiếu 50, crop dân tộc đã bỏ được dãy chấm dài, nhưng VietOCR gốc vẫn đọc `Dây` thay cho `Tày`.
+## So sánh trên cùng 28 crop test
 
-## Cách chạy demo
+CER tính số thao tác sửa ký tự chia tổng ký tự nhãn. OCR thô tính đúng toàn bộ chuỗi, phân biệt dấu và chữ hoa/thường. Cột định dạng chỉ chuẩn hóa ngày số hợp lệ và bỏ khác biệt hoa/thường. Cột có ràng buộc bổ sung giải mã theo khuôn ngày và chấm điểm chuỗi ứng viên dân tộc/tôn giáo bằng VietOCR; không có sửa tay trong các số này.
 
-Mở PowerShell ở thư mục `Demo`:
+| Model | OCR thô đúng toàn trường | CER thô | Sau định dạng | Có ràng buộc trường |
+| --- | ---: | ---: | ---: | ---: |
+| VietOCR gốc | 2/28 | 45,6% | 2/28 | 4/28 |
+| Fine-tune v2 | **10/28** | **25,5%** | **12/28** | **14/28** |
+
+OCR thô trên mực đen: gốc 1/12, fine-tune 6/12; CER 39,6% → 20,8%. Mực xanh: gốc 1/16, fine-tune 4/16; CER 50,0% → 29,0%. Họ tên của fine-tune mới đúng 2/7; ngày sinh còn nhầm chữ số. Trên valid, kết quả có ràng buộc đạt 16/28 so với OCR thô 13/28.
+
+Các đề xuất có ràng buộc đều giữ OCR thô và cảnh báo trong JSON. Chúng vẫn có thể sai: một ngày được ép về đúng khuôn có thể hợp lệ về lịch nhưng sai nội dung. Ví dụ phiếu 50 hiện đọc tháng 11 thành 01, dù họ tên, dân tộc và tôn giáo đúng sau giải mã trường. Không coi `all_fields_valid` là độ chính xác; đó chỉ là kiểm tra định dạng.
+
+Trang đối chiếu cục bộ: `prepared/extended1_v2/results.html` (ảnh phiếu, crop gốc/sạch, nhãn, kết quả hai model). Báo cáo từng dự đoán: `models/extended1_v2_test_structured.json` và `models/extended1_v2_valid_structured.json`.
+
+## Chạy và tự kiểm tra
+
+Trong PowerShell tại thư mục repo:
 
 ```powershell
 .\start_extended1.ps1
 ```
 
-Mở <http://127.0.0.1:7861/>. Chọn phiếu mẫu hoặc tải ảnh, xem và xác nhận bốn crop. Chọn model trước khi bấm OCR. Có thể đổi model rồi bấm OCR lại trên cùng crop để so sánh. Nếu chữ sai, sửa ô kết quả trước khi xuất JSON. Trọng số fine-tune cục bộ: `models/incremental_component_head_step1.pth`; máy khác cần nhận file này riêng. Nếu chưa có file đó, chạy trực tiếp `ocr_review_app.py` để dùng model gốc trên cổng 7860.
+Mở <http://127.0.0.1:7861/>. Model mặc định là **Fine-tune Extended 1**, có thể chọn VietOCR gốc để so cùng crop. Nếu đã có tiến trình chạy cổng đó thì mở trang, không khởi động thêm một bản.
 
-## Tái hiện bước train nhỏ
-
-Sau khi đặt ảnh và nhãn cục bộ đúng đường dẫn:
+Kiểm thử đã qua: bảy test về giữ nét qua dòng chấm, dấu tiếng Việt, định dạng ngày không đoán chữ số, tách nhóm phiếu, train/inference cùng preprocessing, đổi crop hủy dự đoán cũ và JSON giữ OCR thô/nội dung sửa. Kiểm thử Gradio thật đã chạy cả model gốc/fine-tune, bật/tắt lọc, chặn OCR chưa xác nhận, crop tay và tải JSON. Phiếu bút đen số 1 trong train đọc 4/4; phiếu bút xanh số 50 trong test đọc 3/4 sau giải mã trường. Đã mở và thao tác trên giao diện thật.
 
 ```powershell
-& '.\.venv\Scripts\python.exe' '.\prepare_dataset.py' --input-dir '.\forms\dataset_20261102' --output-dir '.\prepared\dataset_20261103_component' --ground-truth '.\forms\dataset_20261102\ground_truth_first_pass.csv'
-& '.\.venv\Scripts\python.exe' '.\export_vietocr.py' --data-dir '.\prepared\dataset_20261103_component' --skip-unlabeled --allow-provisional-form-groups
-& '.\.venv\Scripts\python.exe' '.\prepare_dataset.py' --input-dir '.' --output-dir '.\prepared\dataset_20261103_component\pilot' --ground-truth '.\pilot_labels.csv'
-& '.\.venv\Scripts\python.exe' '.\train_extended1.py' --data-dir '.\prepared\dataset_20261103_component' --regression-dir '.\prepared\dataset_20261103_component\pilot' --output '.\models\incremental_component_head_step1.pth' --scope head --epochs 3 --lr 0.00001
-& '.\.venv\Scripts\python.exe' '.\evaluate_test.py' --data-dir '.\prepared\dataset_20261103_component' --weights '.\models\incremental_component_head_step1.pth' --output '.\models\incremental_component_head_step1_test.json'
+& '.\.venv\Scripts\python.exe' -m unittest test_extended1 -v
+& '.\.venv\Scripts\python.exe' '.\smoke_demo.py'
 ```
 
-Lịch sử train nằm trong JSON cạnh checkpoint; dự đoán từng trường của test nằm trong `models/incremental_component_head_step1_test.json`. Bước kế tiếp: hai người kiểm tra nhãn, gắn ID người viết thật, thu phiếu mới chưa xem, xử lý mực đen đè lên dòng chấm, rồi chỉ fine-tune tiếp nếu valid và tập kiểm tra mới đều tốt hơn.
+## Tái hiện quy trình với dữ liệu cục bộ
+
+```powershell
+& '.\.venv\Scripts\python.exe' '.\prepare_dataset.py' --input-dir '.\forms\dataset_20261102' --output-dir '.\prepared\extended1_v2' --ground-truth '.\forms\dataset_20261102\ground_truth_audited_v2.csv'
+& '.\.venv\Scripts\python.exe' '.\export_vietocr.py' --data-dir '.\prepared\extended1_v2' --skip-unlabeled --allow-provisional-form-groups --reuse-split '.\configs\extended1_split.json'
+& '.\.venv\Scripts\python.exe' '.\prepare_dataset.py' --input-dir '.' --output-dir '.\prepared\extended1_v2\pilot' --ground-truth '.\pilot_labels.csv'
+& '.\.venv\Scripts\python.exe' '.\finetune_v2.py' --output '.\models\extended1_v2.pth' --epochs 30 --stop-after 5 --lr 0.00003
+& '.\.venv\Scripts\python.exe' '.\finetune_v2.py' --initial-weights '.\models\extended1_v2.pth' --output '.\models\extended1_v2_continued.pth' --epochs 25 --lr 0.00002 --patience 7
+& '.\.venv\Scripts\python.exe' '.\evaluate_test.py' --data-dir '.\prepared\extended1_v2' --weights '.\models\extended1_v2_continued.pth' --output '.\models\extended1_v2_valid_structured.json' --split valid --structured
+& '.\.venv\Scripts\python.exe' '.\evaluate_test.py' --data-dir '.\prepared\extended1_v2' --weights '.\models\extended1_v2_continued.pth' --output '.\models\extended1_v2_test_structured.json' --split test --structured
+& '.\.venv\Scripts\python.exe' '.\select_extended1_model.py'
+& '.\.venv\Scripts\python.exe' '.\make_review_page.py' --data-dir '.\prepared\extended1_v2' --source-dir '.\forms\dataset_20261102' --evaluation '.\models\extended1_v2_test_structured.json'
+```
+
+Ảnh, nhãn và trọng số không nằm trên GitHub; nhóm cần nhận riêng các file này. Lần đánh giá chính thức tiếp theo cần nhãn được nhóm kiểm lại, ID người viết thật và phiếu mới chưa dùng để chỉnh pipeline. Tài liệu tham khảo: [VietOCR](https://github.com/pbcquoc/vietocr); danh mục dân tộc dùng cho giải mã, có thêm biến thể tên gọi, tham khảo [InvestVietnam](https://investvietnam.gov.vn/vi/co-ban-ve-viet-nam.nd/cac-dan-toc-viet-nam.html). Danh sách tôn giáo trong demo chỉ là các giá trị ví dụ hỗ trợ, không phải một phân loại đầy đủ.

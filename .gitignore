@@ -14,6 +14,7 @@ ocr_result_vietocr.json
 # Fine-tuned weights should be shared separately until their publication is intentional.
 models/*.pth
 models/*.json
+models/*.tmp
 models/pilot_generated/
 
 # Collected forms and labels may contain personal data.
