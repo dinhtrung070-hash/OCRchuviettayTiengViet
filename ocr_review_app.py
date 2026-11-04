@@ -105,8 +105,11 @@ def get_field_predictor(weights: str | None, field: str):
 def model_identity(weights: str | None) -> dict:
     if weights and Path(weights).suffix.lower() == ".json":
         data = load_bundle(str(Path(weights).resolve()))
-        return {"name": data["name"], "base": data["base"], "fields": data["fields"],
-                "preprocess_version": data["preprocess_version"]}
+        identity = {"name": data["name"], "base": data["base"], "fields": data["fields"],
+                    "preprocess_version": data["preprocess_version"]}
+        if "initializations" in data:
+            identity["initializations"] = data["initializations"]
+        return identity
     return get_predictor(weights).form_metadata
 
 
@@ -299,6 +302,20 @@ def result_payload(prepared: dict, edited: dict[str, str], weights: str | None) 
 
 def build_app(weights: str | None = None, compare_weights: str | None = None,
               default_model: str = "baseline") -> gr.Blocks:
+    previous_weights = None
+    previous_path = BASE_DIR / "models" / "extended1_v3_previous_bundle.json"
+    if compare_weights and previous_path.is_file() and Path(compare_weights).resolve() != previous_path.resolve():
+        try:
+            load_bundle(str(previous_path.resolve()))
+        except (ValueError, OSError):
+            pass
+        else:
+            previous_weights = str(previous_path.resolve())
+    current_label = (load_bundle(str(Path(compare_weights).resolve())).get("name", "Fine-tune hiện tại")
+                     if compare_weights and Path(compare_weights).suffix.lower() == ".json" else "Fine-tune hiện tại")
+    model_options = [("VietOCR gốc", "baseline"), (current_label, "fine_tuned")]
+    if previous_weights:
+        model_options.append(("Fine-tune v3 · đối chiếu", "previous"))
     model_note = (
         "Có thể chọn VietOCR gốc hoặc bản fine-tune Extended 1 để so trên cùng ảnh crop."
         if compare_weights else
@@ -355,7 +372,7 @@ def build_app(weights: str | None = None, compare_weights: str | None = None,
         apply_button = gr.Button("Dùng crop vừa chọn", visible=False)
 
         model_choice = gr.Radio(
-            choices=[("VietOCR gốc", "baseline"), ("Fine-tune Extended 1", "fine_tuned")],
+            choices=model_options,
             value=default_model, label="Model dùng cho lượt OCR này", visible=bool(compare_weights),
         )
         ocr_button = gr.Button("2. Xác nhận crop và chạy VietOCR", variant="primary")
@@ -466,7 +483,16 @@ def build_app(weights: str | None = None, compare_weights: str | None = None,
         def on_ocr(state, selected_model, *confirmation_values):
             if not all(confirmation_values):
                 raise gr.Error("Hãy xác nhận Crop đúng cho cả bốn trường trước khi OCR.")
-            selected_weights = compare_weights if compare_weights and selected_model == "fine_tuned" else weights
+            if selected_model == "previous":
+                if not previous_weights:
+                    raise gr.Error("Chưa có đủ trọng số của bản v3 để đối chiếu.")
+                selected_weights = previous_weights
+            elif selected_model == "fine_tuned":
+                selected_weights = compare_weights or weights
+            elif selected_model == "baseline":
+                selected_weights = weights
+            else:
+                raise gr.Error("Lựa chọn model không hợp lệ.")
             try:
                 details = recognize_detailed(state, selected_weights)
                 predictions = {field: item["raw"] for field, item in details.items()}

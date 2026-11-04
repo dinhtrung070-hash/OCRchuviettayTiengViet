@@ -123,6 +123,16 @@ def brief(result: dict) -> dict:
     return {key: result[key] for key in ("exact", "total", "cer")}
 
 
+def field_results(result: dict) -> dict:
+    fields = {Path(row["image"]).stem for row in result["rows"]}
+    summaries = {}
+    for field in fields:
+        rows = [row for row in result["rows"] if Path(row["image"]).stem == field]
+        summaries[field] = {"exact": sum(row["exact"] for row in rows), "total": len(rows),
+                            "cer": sum(row["distance"] for row in rows) / max(1, sum(len(row["expected"]) for row in rows))}
+    return summaries
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=BASE_DIR / "prepared" / "extended1_v2")
@@ -136,6 +146,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--views", type=int, default=3)
     parser.add_argument("--initial-weights", type=Path)
+    parser.add_argument("--field-checkpoints", action="store_true",
+                        help="Also retain validation improvements for each field, with replay protection")
     parser.add_argument("--cnn-last-block", action="store_true",
                         help="Also update final VGG convolution block; earlier blocks and batchnorm stay frozen")
     parser.add_argument("--cnn-lr-ratio", type=float, default=.1)
@@ -230,6 +242,9 @@ def main() -> None:
               "limits": "Labels read from images; unknown real writer IDs; reused test is exploratory. Replay forms are training data."}
     print("baseline", brief(initial_valid), "replay", brief(initial_replay), flush=True)
     best = (initial_valid["cer"], -initial_valid["exact"])
+    field_best = field_results(initial_valid)
+    replay_reference = field_results(initial_replay)
+    report["field_checkpoints"] = {}
     stale = 0
     args.output.parent.mkdir(parents=True, exist_ok=True)
     for epoch in range(min(args.epochs, args.stop_after or args.epochs)):
@@ -266,6 +281,21 @@ def main() -> None:
                 "valid": validation, "replay": regression, "accepted": accepted,
                 "seconds": round(time.monotonic()-start, 1)}
         report["history"].append(item)
+        if args.field_checkpoints:
+            for field, metric in field_results(validation).items():
+                previous = field_best[field]
+                replay_metric = field_results(regression).get(field, {"exact": 0})
+                replay_minimum = replay_reference.get(field, {"exact": 0})["exact"]
+                if (metric["exact"] >= previous["exact"] and
+                    (metric["cer"], -metric["exact"]) < (previous["cer"], -previous["exact"]) and
+                    replay_metric["exact"] >= replay_minimum):
+                    checkpoint = args.output.with_name(args.output.stem + "_" + field + ".pth")
+                    temporary = checkpoint.with_suffix(".pth.tmp")
+                    torch.save(model.state_dict(), temporary)
+                    os.replace(temporary, checkpoint)
+                    field_best[field] = metric
+                    report["field_checkpoints"][field] = {"weights": checkpoint.name, "epoch": epoch+1,
+                                                           "valid": metric, "replay": replay_metric}
         if accepted:
             temporary = args.output.with_suffix(".pth.tmp")
             torch.save(model.state_dict(), temporary)

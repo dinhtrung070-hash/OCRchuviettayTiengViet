@@ -52,7 +52,8 @@ def main() -> None:
                 tuned = predictions["fine_tuned"][(form, row["field"])]
                 previous = next((item for item in evaluation.get("previous_v2", {}).get("rows", [])
                                  if item["form"] == form and item["field"] == row["field"]), None)
-                previous_html = f'V2: <b>{html.escape(previous["predicted"])}</b><br>' if previous else ""
+                previous_label = html.escape(evaluation.get("previous_model_label", "Fine-tune v2"))
+                previous_html = f'{previous_label}: <b>{html.escape(previous["predicted"])}</b><br>' if previous else ""
                 result_html = (f'<p>Gốc: <b>{html.escape(base["predicted"])}</b><br>'
                                + previous_html +
                                f'Fine-tune, OCR thô: <b>{html.escape(tuned["predicted"])}</b><br>'
@@ -71,7 +72,7 @@ def main() -> None:
         summary = '<h1>Đối chiếu VietOCR gốc và fine-tune</h1>'
         models = [("baseline", "Gốc")]
         if "previous_v2" in evaluation:
-            models.append(("previous_v2", "Fine-tune v2"))
+            models.append(("previous_v2", evaluation.get("previous_model_label", "Fine-tune v2")))
         models.append(("fine_tuned", "Fine-tune đang dùng"))
         for model, name in models:
             stats = evaluation[model]

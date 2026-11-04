@@ -56,6 +56,18 @@ def main() -> None:
             assert values == tuple(pilot[path.name][field] for field in payload["fields"]), values
         records.append({"form": path.name, "predictions": dict(zip(payload["fields"], values)), "payload": payload})
         print(path.name, values, flush=True)
+        previous = root / "models/extended1_v3_previous_bundle.json"
+        if previous.is_file() and path.name in ("1.jpg", "50.jpg"):
+            old = json.loads(previous.read_text(encoding="utf-8"))
+            result = client.predict("previous", True, True, True, True, api_name="/on_ocr")
+            old_payload, _, _ = client.predict(*result[-4:], api_name="/on_export")
+            assert old_payload["model"] == old["name"]
+            for field, item in old_payload["fields"].items():
+                expected = old["fields"].get(field, old["base"])
+                assert item["recognition"]["model_metadata"]["sha256"] == expected["sha256"]
+            records[-1]["previous_v3"] = {"predictions": dict(zip(old_payload["fields"], result[-4:])),
+                                          "model_metadata": old_payload["model_metadata"]}
+            print("v3 comparison", path.name, result[-4:], flush=True)
     # Test manual crop and confirm that stale OCR can no longer be exported.
     client.predict(api_name="/begin_edit")
     editor = {"background": handle_file(crops[0]), "layers": [], "composite": handle_file(crops[0])}
@@ -64,7 +76,7 @@ def main() -> None:
     result = client.predict("baseline", True, True, True, True, api_name="/on_ocr")
     payload, _, _ = client.predict(*result[-4:], api_name="/on_export")
     assert payload["model"].endswith("gốc")
-    report_name = "smoke_v3.json" if (root / "models/extended1_bundle.json").is_file() else "smoke_v2.json"
+    report_name = "smoke_latest.json" if (root / "models/extended1_bundle.json").is_file() else "smoke_v2.json"
     (root / "models" / report_name).write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
     print("PASS: upload, crop versions, confirmation gate, both models, manual crop, JSON export.")
 

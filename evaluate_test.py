@@ -77,6 +77,7 @@ def main() -> None:
     parser.add_argument("--decoder", choices=["greedy", "beam"], default="greedy")
     parser.add_argument("--structured", action="store_true", help="Also evaluate model-based field/date proposals separately from raw OCR")
     parser.add_argument("--previous-weights", type=Path, help="Optional previous checkpoint, evaluated on the same crops")
+    parser.add_argument("--previous-label", default="Fine-tune v2", help="Display label for the comparison checkpoint")
     args = parser.parse_args()
     if not args.weights.is_file():
         parser.error(f"Missing fine-tuned weights: {args.weights}")
@@ -103,6 +104,8 @@ def main() -> None:
               "baseline": baseline, "fine_tuned": tuned}
     if args.previous_weights:
         report["previous_v2"] = run(args.previous_weights, rows, metadata, args.decoder, args.structured)
+        report["previous_model_label"] = args.previous_label
+        report["previous_weights_sha256"] = hashlib.sha256(args.previous_weights.read_bytes()).hexdigest()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"baseline": {k: baseline[k] for k in ("correct", "total")},
